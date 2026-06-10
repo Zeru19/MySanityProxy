@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SanityProxy 监控面板</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">SanityProxy</div>
+    <div class="header-stats">
+      <div class="stat-pill" id="stat-mode">
+        <span class="dot dot-green"></span><span id="mode-label">脱敏模式</span>
+      </div>
+      <div class="stat-pill">今日 Token <strong id="stat-tokens">0</strong></div>
+      <div class="stat-pill">请求数 <strong id="stat-reqs">0</strong></div>
+      <div class="stat-pill">命中数 <strong id="stat-hits">0</strong></div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-outline" id="btn-mode-toggle">切换透明模式</button>
+      <button class="btn btn-primary" id="btn-rules">规则管理</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Log table -->
+    <section class="card">
+      <div class="card-header">
+        <h2>实时请求日志</h2>
+        <button class="btn btn-sm" id="btn-clear-log">清空</button>
+      </div>
+      <div class="table-wrap">
+        <table id="log-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>路径</th>
+              <th>耗时(ms)</th>
+              <th>输入 Token</th>
+              <th>输出 Token</th>
+              <th>脱敏命中</th>
+              <th>状态</th>
+              <th>模式</th>
+            </tr>
+          </thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Rule test -->
+    <section class="card">
+      <div class="card-header"><h2>规则测试</h2></div>
+      <div class="test-area">
+        <textarea id="test-input" placeholder="输入测试文本，例如：被告人张三，手机 13812345678，身份证 110101199001011234"></textarea>
+        <button class="btn btn-primary" id="btn-test">测试脱敏</button>
+      </div>
+      <div class="test-results" id="test-results" style="display:none">
+        <div class="result-block">
+          <label>脱敏结果</label>
+          <pre id="test-masked"></pre>
+        </div>
+        <div class="result-block">
+          <label>映射表</label>
+          <pre id="test-mapping"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Rules modal -->
+  <div class="modal-backdrop" id="modal-backdrop" style="display:none">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>脱敏规则管理</h3>
+        <button class="btn-close" id="btn-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="rule-form" id="rule-form">
+          <input id="rf-name" placeholder="规则名称" />
+          <input id="rf-category" placeholder="分类（如：个人身份）" />
+          <input id="rf-pattern" placeholder="正则表达式" />
+          <input id="rf-prefix" type="number" placeholder="保留前缀位数" value="0" min="0" />
+          <button class="btn btn-primary" id="btn-rule-add">添加规则</button>
+        </div>
+        <div class="table-wrap">
+          <table id="rules-table">
+            <thead>
+              <tr>
+                <th>启用</th>
+                <th>名称</th>
+                <th>分类</th>
+                <th>正则</th>
+                <th>前缀</th>
+                <th>来源</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="rules-body"></tbody>
+          </table>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" id="btn-export">导出 JSON</button>
+          <label class="btn btn-outline">导入 JSON<input type="file" id="import-file" accept=".json" style="display:none"/></label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,3 +1,6 @@
+<!-- Language switch -->
+**English** · [简体中文](README.zh-CN.md)
+
 # SanityProxy
 
 A local reverse proxy that desensitizes sensitive data before it reaches Claude or any Anthropic-compatible LLM API — and restores it in the response. Designed for legal documents, medical records, and any workflow where raw PII must never leave your machine.
@@ -16,7 +19,13 @@ Claude Code ──► SanityProxy (localhost:8080) ──► api.anthropic.com
 4. The LLM responds using the same placeholders
 5. SanityProxy restores all tags to original values before returning to Claude Code
 
+Both `POST /v1/messages` (including streaming) and `POST /v1/messages/count_tokens` are sanitized — they carry the same conversation content, so token-counting requests can't leak raw PII either.
+
 Claude Code receives a complete, natural response — with no awareness of the proxy.
+
+### Safe with extended thinking
+
+The model's own artifacts — `thinking` blocks and their cryptographic `signature` — round-trip **byte-for-byte** through the whole pipeline (desensitize / self-check / re-mask / restore). They are never rewritten, so upstream signature validation always passes. (`thinking` content is intentionally **not** tag-restored in responses, so it stays in tag-space across turns and signatures stay valid — you'll see tags in the reasoning panel, which is by design.) Streaming restoration is SSE-event-aware: it restores only the answer text and tool inputs, reassembles tags split across stream events, and records token usage.
 
 ## Built-in rules (legal document focus)
 
@@ -62,16 +71,18 @@ cd proxy
 python -m pytest tests/ -v
 ```
 
-All 4 tests must pass:
-- `test_pii_stripped_from_upstream_request` — raw PII never reaches the LLM
-- `test_system_prompt_also_desensitized` — system prompts are sanitized too
-- `test_full_roundtrip_pii_restored_in_response` — tags are restored before reaching the caller
-- `test_transparent_mode_passes_raw_data` — transparent (bypass) mode works correctly
+All tests must pass, covering four areas:
+- **Outbound desensitization** — raw PII never reaches the LLM; system prompts and `count_tokens` are sanitized too
+- **Inbound restoration** — tags are restored before reaching the caller; transparent (bypass) mode works
+- **Fail-closed self-check** — `tool_result`/`tool_use` fields are masked; PII outside `messages` is backstopped; block/remask/off policies
+- **Thinking signatures & streaming** — `thinking`/`signature` stay byte-identical; streaming restores text but not thinking, reassembles split tags, logs usage; non-200 upstream returns its real status
 
 ## Dashboard
 
 The web dashboard at `http://localhost:8080/dashboard` provides:
-- Real-time request log (timestamp, latency, token counts, hit count, status)
+- Real-time request log — fixed-height, scrollable panel with a sticky header and live row counter (token counts now populate for streaming requests)
+- Outbound audit — snapshots of what was actually sent upstream (after masking); retain the last 20 / 100 / 200 / 500 / all
+- Self-check policy switch — remask (default) / block (fail-closed) / off
 - Rule manager — enable/disable rules, add custom patterns, import/export JSON
 - Rule tester — paste text and preview desensitization output instantly
 - Mode toggle — switch between desensitize and transparent mode
@@ -99,12 +110,27 @@ proxy/
 ├── models.py         # Pydantic models
 ├── config.py         # configuration
 ├── static/           # web dashboard (HTML / JS / CSS, no build step)
-└── tests/            # 4 automated tests
+└── tests/            # automated tests (outbound, inbound, fail-closed, thinking/streaming)
 ```
+
+## Managing your documents
+
+When you place sensitive source files (legal docs, records, contracts) in the project for Claude Code to read, treat them as the data to be protected — **never commit them**. A `materials/` directory (plus `workspace/`, `data/`, `*.private/`) is pre-ignored in `.gitignore`:
+
+```
+sanity_claude/
+├── proxy/          # the tool (tracked)
+├── materials/      # raw sensitive source files (gitignored — never committed)
+│   └── 2026-case-A/...
+└── workspace/      # Claude's generated analysis/drafts (gitignored)
+```
+
+Reading a local file doesn't send it anywhere; content only leaves the machine when it's put into a request — and then **only in desensitize mode**, where the proxy swaps PII for tags (verify in the dashboard's Outbound audit). For identifiers beyond the built-in rules (employee IDs, internal ticket numbers), add a custom rule first. Keep your own encrypted backup of `materials/` — it's never in git. See AGENTS.md → "资料文件管理" for the full convention.
 
 ## Security notes
 
 - The proxy binds to `127.0.0.1` by default — not exposed to the network
-- `sanity.db` (rule storage) is local only and excluded from version control
-- The tag-to-value mapping lives in memory and is cleared on restart
-- No data is written to disk beyond rule configuration
+- `sanity.db` stores only rules and settings (no original text); local-only and excluded from version control
+- The tag↔value mapping is **per-request**: created fresh for each request and discarded when it finishes — raw PII is never retained process-wide or written to disk
+- Response headers that describe the original bytes (`content-encoding` / `content-length` / `transfer-encoding`) are stripped, since the proxy decompresses and rewrites the body
+- Your source documents live in gitignored directories (see *Managing your documents*) and are never committed

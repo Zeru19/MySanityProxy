@@ -113,13 +113,13 @@ pip install pytest pytest-asyncio   # 首次需要
 python -m pytest tests/ -v
 ```
 
-全部 4 个测试通过即代表代理工作正常：
-- `test_pii_stripped_from_upstream_request` — 发往上游的请求不含原始 PII
-- `test_system_prompt_also_desensitized` — system prompt 同样被脱敏
-- `test_full_roundtrip_pii_restored_in_response` — 响应中的标签被正确还原
-- `test_transparent_mode_passes_raw_data` — 透明模式不修改数据
+全部用例通过即代表代理工作正常，覆盖四组场景：
+- **出站脱敏**（`test_desensitize_outbound.py`）— 发往上游的请求不含原始 PII，system prompt 同样被脱敏
+- **入站还原**（`test_restore_inbound.py`）— 响应中的标签被正确还原；透明模式不修改数据
+- **出站自检 / fail-closed**（`test_failclosed.py`）— tool_result/tool_use 等字段也脱敏；漏网 PII 被兜底；案号加固；block/remask/off 三档行为
+- **thinking 签名与流式**（`test_thinking_signature.py`）— thinking 块与 signature 全程逐字节不变；流式只还原正文不还原 thinking、能拼回被劈开的标签、采集 usage；上游非 200 回传真实状态码
 
-> **⚠️ 测试未全部通过时，禁止继续后续步骤。** Agent 必须回头定位失败原因、检查并修改相关代码（`desensitizer.py` / `rules.py` / `server.py` 等），然后重新运行 `python -m pytest tests/ -v`，如此循环直到 **4/4 全部通过**为止。只有测试全绿，才进入「测试通过后的操作」环节。
+> **⚠️ 测试未全部通过时，禁止继续后续步骤。** Agent 必须回头定位失败原因、检查并修改相关代码（`desensitizer.py` / `rules.py` / `server.py` 等），然后重新运行 `python -m pytest tests/ -v`，如此循环直到**全部通过**为止。只有测试全绿，才进入「测试通过后的操作」环节。
 
 ### 方法 C：在 Claude Code 中直接测试
 
@@ -178,7 +178,9 @@ sanity_claude/
     └── tests/
         ├── conftest.py
         ├── test_desensitize_outbound.py  ← 验证出站脱敏
-        └── test_restore_inbound.py       ← 验证入站还原
+        ├── test_restore_inbound.py       ← 验证入站还原
+        ├── test_failclosed.py            ← 出站自检 / fail-closed / 案号加固
+        └── test_thinking_signature.py    ← thinking 签名不变 + 流式还原
 ```
 
 ---
@@ -232,6 +234,84 @@ UPSTREAM_URL = "https://your-compatible-api.example.com"
 
 ---
 
+## 出站安全：零泄漏自检与审计
+
+### 出站自检（转发前的兜底，策略可选）
+
+脱敏覆盖的字段：`messages` 里的 **text 块、`tool_result` 内容、`tool_use` 入参、`document` 文本**，以及 `system`——凡是承载用户数据、会上云的内容都脱。`tools` 定义、`model`、`metadata` 等框架字段不脱（不是用户隐私）。
+
+脱敏作用于两个端点：`POST /v1/messages`（含流式）与 `POST /v1/messages/count_tokens`——两者携带同样的对话内容，**count_tokens 也必须脱敏**，否则 token 计数请求会把原文 PII 直接外发。
+
+在此之上，代理**转发前**再做一道自检兜底。自检核对**整段会上云的请求体**，仅跳过 `tools`/`model`/`metadata` 三个确知合法携带示例邮箱/长数字的框架字段（避免假阳性 403）。这样即便 PII 藏在结构化脱敏够不到的位置（顶层非常规字段、未知 content 块类型等），`block`/`off` 也能发现——避免"最严档反而漏"的盲区。处理策略可在面板右上角「出站自检」下拉切换，持久化在 `sanity.db`：
+
+| 策略 | 行为 | 适用 |
+|------|------|------|
+| **补脱后放行**（`remask`，默认） | 对请求体做**结构化广覆盖**兜底（遍历可改写字符串，跳过 thinking/签名/结构字段与框架字段），把任何残留 PII **就地脱敏后再转发**——既不外泄也不拦截 | 既要安全又要顺滑，推荐 |
+| **拦截**（`block`，fail-closed） | 自检命中即返回 `403`，绝不发往云端（"宁可拦错，不可放过"） | 高敏、宁可误拦 |
+| **仅告警**（`off`） | 命中只在「出站审计」记一条告警，照常转发 | 只想观察、不被打断 |
+
+- 请求体解析/脱敏失败时一律拦截（脱敏模式下不"出错即放行原文"）。
+- 透明模式不做自检（本就不脱敏）。
+- 切换也可走 API：`POST /dashboard/api/selfcheck`，body `{"policy":"remask|block|off"}`。
+
+> `remask` 是广覆盖兜底，可能顺带把非常规字段里形似 PII 的内容（如工具 schema 的示例号码）也打上标签，属安全偏向的副作用，不影响脱敏正确性。
+>
+> **关键不变量**：`thinking` / `redacted_thinking` 块及任意位置的 `signature`、`tool_use_id`、`id` 等结构字段，在脱敏 / 自检 / 补脱 / 还原全链路中**绝不被改写，逐字节往返**。否则上游验签失败返回 400，Claude Code 会不断重试（历史 bug）。相应地，**响应里的 thinking 不做标签还原**——让它在整条会话里保持标签态，签名才能恒有效（代价：思考面板显示的是标签）。
+
+### 出站审计快照
+
+每次出站请求都会在面板「出站审计」中留一份**脱敏后实际发送内容**的快照（被拦截的请求也会记录，并标注命中详情，样本做部分遮挡）。可点「查看」核对到底发了什么。
+
+**保留条数可在面板配置**：最近 `20 / 100 / 200 / 500 / 所有`。设置持久化在 `sanity.db`，重启保留。
+
+> 面板「实时请求日志」与「出站审计」均为**定高可滚动**面板（表头吸顶），不会随请求增多把页面撑长；日志标题旁的计数标签显示当前缓冲条数（上限 200 行）。**流式请求的输入/输出 Token 现已从 SSE 的 `message_start`/`message_delta` 事件解析记录**（此前流式恒显示 0）。
+
+> 注意：选「所有」时快照不设上限，长时间运行会占用较多内存；按需选择。
+
+快照与容量也可通过 API 操作：
+
+```bash
+# 查看快照 + 当前容量
+curl -s http://localhost:8080/dashboard/api/snapshots
+
+# 设置容量（100/200/500/all）
+curl -X POST http://localhost:8080/dashboard/api/snapshot-capacity \
+  -H "Content-Type: application/json" -d '{"capacity":"500"}'
+```
+
+### 面板时间
+
+实时日志与审计快照的时间均为 **UTC+8（东八区）**。
+
+---
+
+## 资料文件管理（用户放置敏感资料的建议）
+
+用户常需在项目目录下放置大量敏感原文（法律文书、病历、合同等）供 Claude Code 阅读分析。**这些资料是脱敏对象本身，绝不能进 git、不能外发。** 建议如下：
+
+**1. 固定一个被忽略的资料目录。** 已在 `.gitignore` 预留 `materials/`、`workspace/`、`data/`、`*.private/`。把原始资料放进 `materials/`，按案件/主题分子目录：
+
+```
+sanity_claude/
+├── proxy/                  # 工具代码（入库）
+├── materials/              # 原始敏感资料（已 gitignore，绝不入库）
+│   ├── 2026-案件A/
+│   │   ├── 起诉状.pdf
+│   │   └── 笔录.txt
+│   └── 2026-案件B/
+└── workspace/              # Claude 生成的分析/草稿（已 gitignore）
+```
+
+**2. 命名与组织。** 用「日期/案号-主题」开头便于检索；同一案件的原文与产出物分开（`materials/` 放原文，`workspace/` 放生成结果），避免误把含 PII 的原文当成果提交。
+
+**3. 资料经代理才安全。** Claude Code 读取本地文件本身不外发；只有当文件内容被放进发往 Anthropic 的请求时才会上云——**此时务必处于脱敏模式**，代理会把其中 PII 换成标签。可在面板「出站审计」核对实际发出的内容。对超出内置规则的资料专有标识（员工号、内部单号等），先在「规则管理」加自定义规则再喂给模型。
+
+**4. 大文件与体积。** 单次请求体积有限，超大文档应拆分或摘要后再喂；`materials/` 不入库，故不影响仓库体积，但请自行做**加密备份**（资料一旦丢失不可恢复）。
+
+**5. 清理。** 注册表（值↔标签映射）每请求隔离、随请求结束回收，不落盘；`sanity.db` 只存规则与设置，不存原文。原始资料的留存与销毁由用户在 `materials/` 自行管理。
+
+---
+
 ## 内置脱敏规则一览
 
 | 名称 | 分类 | 示例 |
@@ -264,8 +344,12 @@ UPSTREAM_URL = "https://your-compatible-api.example.com"
 
 ## 修改代码须知
 
-- **改完核心逻辑后必须跑测试**：`python -m pytest tests/ -v`，4/4 全绿才算完成
-- 脱敏标签格式固定为 `[[SANITY_CATEGORY_NNN]]`，不要轻易变更，会破坏还原逻辑
-- `sanity.db` 是运行时产物，不进 git；内置规则在首次启动时由 `storage.py` 写入
+- **改完核心逻辑后必须跑测试**：`python -m pytest tests/ -v`，全部用例（含出站自检、案号加固）全绿才算完成
+- 脱敏标签格式固定为 `[[SANITY_CATEGORY_NNN]]`，不要轻易变更，会破坏还原与自检逻辑
+- 需要脱敏的端点由 `server.py` 的 `should_mask` 判定（`messages` + `messages/count_tokens`）；新增会上云内容的端点时，记得一并纳入，否则原文会绕过脱敏
+- `sanity.db` 是运行时产物，不进 git；内置规则首次启动时写入，**之后每次启动会用 `rules.py` 里的最新正则同步覆盖内置规则**（保留用户的启用/停用状态），所以改内置规则正则直接改 `rules.py` 即可
+- 出站自检 `desensitizer.detect_residual` 去标签时用**空格**替换（非删除），以免关键词型规则（如姓名）在标签移除后与后文相邻而假阳性
+- **绝不可改写 `thinking`/`signature`/`tool_use_id`/`id` 等字段**：自检、补脱、还原统一走 `desensitizer._walk_maskable`（跳过受保护字段）做结构化遍历，**严禁把整段 JSON 当字符串跑正则替换**——那会改坏签名导致上游 400 死循环
+- 脱敏注册表（值→标签映射）为**每请求隔离**（`_new_registry()`），不再有模块级全局；还原走每请求 `session_mapping`，不依赖全局状态
 - Python 最低版本 3.9，类型注解用 `Optional[X]` 而非 `X | None`（3.10+ 语法）
 - 姓名规则依赖 `regex` 模块（支持变长 lookbehind），不是标准库 `re`

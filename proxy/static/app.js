@@ -37,10 +37,12 @@ function appendLog(entry) {
   tbody.prepend(tr);
   // cap at 200 rows
   while (tbody.children.length > 200) tbody.removeChild(tbody.lastChild);
+  document.getElementById("log-count").textContent = tbody.children.length;
 }
 
 document.getElementById("btn-clear-log").addEventListener("click", () => {
   document.getElementById("log-body").innerHTML = "";
+  document.getElementById("log-count").textContent = "0";
   totalReqs = totalTokens = totalHits = 0;
   document.getElementById("stat-tokens").textContent = "0";
   document.getElementById("stat-reqs").textContent = "0";
@@ -62,7 +64,16 @@ async function fetchStatus() {
   const res = await fetch(`${API}/status`);
   const data = await res.json();
   applyMode(data.mode);
+  if (data.selfcheck) document.getElementById("selfcheck-policy").value = data.selfcheck;
 }
+
+document.getElementById("selfcheck-policy").addEventListener("change", async (e) => {
+  await fetch(`${API}/selfcheck`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ policy: e.target.value }),
+  });
+});
 
 function applyMode(mode) {
   currentMode = mode;
@@ -92,6 +103,88 @@ document.getElementById("btn-mode-toggle").addEventListener("click", async () =>
 });
 
 fetchStatus();
+
+// ── Outbound audit snapshots ─────────────────────────────────────────────────
+let snapItems = [];
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function loadSnapshots() {
+  const res = await fetch(`${API}/snapshots`);
+  const data = await res.json();
+  snapItems = data.items || [];
+  const sel = document.getElementById("snap-capacity");
+  if (sel.value !== data.capacity) sel.value = data.capacity;
+  renderSnapshots();
+}
+
+function renderSnapshots() {
+  const tbody = document.getElementById("snap-body");
+  tbody.innerHTML = "";
+  snapItems.forEach((s, idx) => {
+    const tr = document.createElement("tr");
+    const n = s.leaks ? s.leaks.length : 0;
+    let checkBadge;
+    if (s.status === "blocked") checkBadge = `<span class="badge badge-red">拦截 ${n}</span>`;
+    else if (s.status === "remasked") checkBadge = `<span class="badge badge-blue">补脱 ${n}</span>`;
+    else if (s.status === "warned") checkBadge = `<span class="badge badge-yellow">告警 ${n}</span>`;
+    else checkBadge = `<span class="badge badge-green">通过</span>`;
+    tr.innerHTML = `
+      <td class="mono">${s.timestamp}</td>
+      <td class="mono truncate">${escapeHtml(s.path)}</td>
+      <td>${s.size}</td>
+      <td>${s.hits}</td>
+      <td>${checkBadge}</td>
+      <td><button class="btn btn-sm" data-snap="${idx}">查看</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById("snap-body").addEventListener("click", (e) => {
+  const idx = e.target.dataset.snap;
+  if (idx === undefined) return;
+  const s = snapItems[idx];
+  const leaksBlock = document.getElementById("snap-leaks");
+  if (s.leaks && s.leaks.length) {
+    const labels = {
+      blocked: "⚠️ 自检命中（该请求已被拦截，未发送）",
+      remasked: "🛠 自检命中（已就地补脱后发送，原文未外泄）",
+      warned: "⚠️ 自检命中（按「仅告警」策略已放行，未补脱）",
+    };
+    leaksBlock.style.display = "block";
+    document.getElementById("snap-leaks-label").textContent = labels[s.status] || "⚠️ 自检命中";
+    document.getElementById("snap-leaks-pre").textContent = JSON.stringify(s.leaks, null, 2);
+  } else {
+    leaksBlock.style.display = "none";
+  }
+  document.getElementById("snap-body-pre").textContent = s.body || "（空）";
+  document.getElementById("snap-modal-backdrop").style.display = "flex";
+});
+
+document.getElementById("btn-snap-close").addEventListener("click", () => {
+  document.getElementById("snap-modal-backdrop").style.display = "none";
+});
+document.getElementById("snap-modal-backdrop").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.style.display = "none";
+});
+
+document.getElementById("btn-snap-refresh").addEventListener("click", loadSnapshots);
+
+document.getElementById("snap-capacity").addEventListener("change", async (e) => {
+  await fetch(`${API}/snapshot-capacity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ capacity: e.target.value }),
+  });
+  await loadSnapshots();
+});
+
+loadSnapshots();
+// 出站快照随新请求增长，定时轻量刷新
+setInterval(loadSnapshots, 5000);
 
 // ── Rule test ────────────────────────────────────────────────────────────────
 document.getElementById("btn-test").addEventListener("click", async () => {

@@ -14,6 +14,11 @@ _db: Optional[aiosqlite.Connection] = None
 _log_buffer: deque = deque(maxlen=LOG_CAPACITY)
 _log_subscribers: list[asyncio.Queue] = []
 
+# 出站审计快照缓冲。容量可在面板配置：20 / 100 / 200 / 500 / all（不限）
+_SNAPSHOT_CHOICES = {"20": 20, "100": 100, "200": 200, "500": 500, "all": None}
+_snapshot_capacity_label = "100"
+_snapshot_buffer: deque = deque(maxlen=100)
+
 
 async def get_db() -> aiosqlite.Connection:
     global _db
@@ -49,7 +54,22 @@ async def _init_schema():
             "INSERT INTO rules (name, category, pattern, preserve_prefix, enabled, builtin) VALUES (?,?,?,?,1,1)",
             [(r.name, r.category, r.pattern, r.preserve_prefix) for r in BUILTIN_RULES],
         )
+    else:
+        # 内置规则已存在：把代码里的最新正则同步进库（如案号规则加固），
+        # 但保留用户对启用/停用状态的设置。
+        for r in BUILTIN_RULES:
+            await db.execute(
+                "UPDATE rules SET pattern=?, category=?, preserve_prefix=? WHERE builtin=1 AND name=?",
+                (r.pattern, r.category, r.preserve_prefix, r.name),
+            )
     await db.commit()
+
+    # 载入已保存的快照容量设置
+    global _snapshot_capacity_label, _snapshot_buffer
+    saved = await get_setting("snapshot_capacity", _snapshot_capacity_label)
+    if saved in _SNAPSHOT_CHOICES:
+        _snapshot_capacity_label = saved
+        _snapshot_buffer = deque(_snapshot_buffer, maxlen=_SNAPSHOT_CHOICES[saved])
 
 
 async def get_all_rules() -> list[dict]:
@@ -141,3 +161,29 @@ def unsubscribe_logs(q: asyncio.Queue):
         _log_subscribers.remove(q)
     except ValueError:
         pass
+
+
+# ── 出站审计快照 ──────────────────────────────────────────────────────────────
+
+def add_snapshot(entry: dict):
+    _snapshot_buffer.append(entry)
+
+
+def get_snapshots() -> list[dict]:
+    # 最新的在前
+    return list(reversed(_snapshot_buffer))
+
+
+def get_snapshot_capacity() -> str:
+    return _snapshot_capacity_label
+
+
+async def set_snapshot_capacity(label: str) -> str:
+    """更新快照容量（100/200/500/all），并按新容量重建缓冲，保留已有快照。"""
+    global _snapshot_capacity_label, _snapshot_buffer
+    if label not in _SNAPSHOT_CHOICES:
+        raise ValueError("invalid capacity")
+    _snapshot_capacity_label = label
+    _snapshot_buffer = deque(_snapshot_buffer, maxlen=_SNAPSHOT_CHOICES[label])
+    await set_setting("snapshot_capacity", label)
+    return label

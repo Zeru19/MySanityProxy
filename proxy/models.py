@@ -30,6 +30,10 @@ class ModeUpdate(BaseModel):
     mode: str  # "desensitize" | "transparent"
 
 
+class SelfCheckUpdate(BaseModel):
+    policy: str  # "block" | "remask" | "off"
+
+
 class LogEntry(BaseModel):
     id: str
     timestamp: str

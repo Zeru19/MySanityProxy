@@ -5,6 +5,13 @@ harness/
 # 代理运行时生成的本地数据库（含脱敏规则状态，每台机器独立）
 proxy/sanity.db
 
+# 用户资料（敏感原文：法律文书、病历等）——绝不入库。
+# 约定放在以下目录之一，按案件/主题分子目录管理；详见 AGENTS.md「资料文件管理」。
+materials/
+workspace/
+data/
+*.private/
+
 # Python
 __pycache__/
 *.pyc

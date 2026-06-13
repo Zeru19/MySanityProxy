@@ -26,6 +26,19 @@ def _rules():
             for r in BUILTIN_RULES]
 
 
+def _mock_ok_response():
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.headers = {"content-type": "application/json"}
+    resp.content = json.dumps({
+        "id": "msg_x", "type": "message", "role": "assistant",
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }).encode()
+    resp.json = MagicMock(return_value=json.loads(resp.content))
+    return resp
+
+
 # 一段会被旧 remask 误伤的签名：含 "护照号"(两字母+7数字) 和长数字片段
 RAW_SIG = "ErcBCkgIdigits1234567abcDEF6225880212345678901xyz=="
 
@@ -288,3 +301,111 @@ async def test_stream_non_200_returns_real_status():
                 headers={"x-api-key": "sk", "content-type": "application/json"})
     assert resp.status_code == 400, f"流式非 200 应回传真实状态码，实际 {resp.status_code}"
     print("\n[PASS] 流式上游 400 回传真实状态码（不再假 200 包错误体）")
+
+
+# ── 端到端：图片 / base64 经整个代理路径必须原样转发 ──────────────────────────
+# data 串里特意塞入会命中规则的【裸子串】（不用占位标签，免得被还原）：
+#   19 位数字→银行卡、18 位大写数字→统一社会信用代码、双字母+7数字→护照。
+# 证明即便 base64 里凑巧含这些，代理也不会改动 image 的 data。
+_IMG_DATA = "iVBORw0KGgoAAAANSUhEUgo" + "1234567890123456789" + "ABCDEFGH012345678Y" + "Gd1234567" + "tail=="
+
+
+def _image_payload(stream=False):
+    return {
+        "model": "claude-opus-4-6", "max_tokens": 64, **({"stream": True} if stream else {}),
+        "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _IMG_DATA}},
+            {"type": "text", "text": "请描述这张图片"},
+        ]}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_image_passthrough_nonstream_server():
+    """非流式：含 image 的请求经整个 proxy() 路径，转发给上游的 base64 必须逐字节不变。"""
+    from server import app
+    import server
+
+    captured = {}
+
+    async def fake_request(method, url, headers=None, content=None, **kwargs):
+        captured["body"] = json.loads(content)
+        return _mock_ok_response()
+
+    with patch.object(server, "_http_client") as mc:
+        mc.request = AsyncMock(side_effect=fake_request)
+        server._current_mode = "desensitize"
+        server._current_selfcheck = "remask"
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/v1/messages", json=_image_payload(),
+                                     headers={"x-api-key": "sk", "content-type": "application/json"})
+
+    assert resp.status_code == 200
+    fwd = captured["body"]["messages"][0]["content"][0]["source"]["data"]
+    assert fwd == _IMG_DATA, "image base64 被代理改动了！"
+    print("\n[PASS] 非流式：image base64 原样转发")
+
+
+@pytest.mark.asyncio
+async def test_image_passthrough_stream_server():
+    """流式：含 image 的请求经 proxy() + _handle_stream，转发的 base64 必须逐字节不变。"""
+    from server import app
+    import server
+
+    captured = {}
+
+    def fake_build(method=None, url=None, headers=None, content=None, **kw):
+        captured["body"] = json.loads(content)
+        return "REQ"
+
+    sse = _sse([("message_start", {"type": "message_start",
+                                   "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}),
+                ("message_stop", {"type": "message_stop"})])
+    fake = _FakeStream(200, [sse.encode("utf-8")])
+    with patch.object(server, "_http_client") as mc:
+        mc.build_request = MagicMock(side_effect=fake_build)
+        mc.send = AsyncMock(return_value=fake)
+        server._current_mode = "desensitize"
+        server._current_selfcheck = "remask"
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/v1/messages", json=_image_payload(stream=True),
+                                     headers={"x-api-key": "sk", "content-type": "application/json"})
+
+    assert resp.status_code == 200
+    fwd = captured["body"]["messages"][0]["content"][0]["source"]["data"]
+    assert fwd == _IMG_DATA, "流式路径下 image base64 被改动了！"
+    print("\n[PASS] 流式：image base64 原样转发")
+
+
+@pytest.mark.asyncio
+async def test_image_not_blocked_by_block_policy():
+    """block 策略下，image 的 base64 绝不能被自检误判为泄漏而 403——必须照常转发。"""
+    from server import app
+    import server
+
+    captured = {}
+
+    async def fake_request(method, url, headers=None, content=None, **kwargs):
+        captured["body"] = content
+        return _mock_ok_response()
+
+    with patch.object(server, "_http_client") as mc:
+        mc.request = AsyncMock(side_effect=fake_request)
+        server._current_mode = "desensitize"
+        server._current_selfcheck = "block"
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post("/v1/messages", json=_image_payload(),
+                                         headers={"x-api-key": "sk", "content-type": "application/json"})
+        finally:
+            server._current_selfcheck = "remask"
+
+    assert resp.status_code == 200, f"block 策略误拦了 image，状态 {resp.status_code}"
+    assert "body" in captured, "image 请求应被转发"
+    print("\n[PASS] block 策略不再把 image base64 误判为泄漏")

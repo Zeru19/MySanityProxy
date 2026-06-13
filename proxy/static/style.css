@@ -95,13 +95,99 @@ header {
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
 .header-actions { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
-.selfcheck-control { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 7px; }
 select {
   background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm); padding: 6px 9px; font-size: 12px; cursor: pointer; transition: border-color .15s;
 }
 select:hover { border-color: var(--text-faint); }
 select:focus { outline: none; border-color: var(--accent); }
+
+/* ── Self-check control ─────────────────────────────────────────────────────── */
+.selfcheck-control {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-muted);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 4px 6px 4px 12px; transition: border-color .15s;
+}
+.selfcheck-control:hover { border-color: var(--border-strong); }
+.selfcheck-control:focus-within { border-color: var(--accent); }
+.selfcheck-control .sc-ico { width: 15px; height: 15px; color: var(--accent); flex-shrink: 0; }
+.selfcheck-control .sc-text { white-space: nowrap; }
+.select-wrap { position: relative; display: inline-flex; }
+.select-wrap::after {
+  content: ""; position: absolute; right: 11px; top: 50%; width: 6px; height: 6px;
+  border-right: 1.6px solid var(--text-faint); border-bottom: 1.6px solid var(--text-faint);
+  transform: translateY(-68%) rotate(45deg); pointer-events: none; transition: border-color .15s;
+}
+.select-wrap:hover::after { border-color: var(--text); }
+.selfcheck-control select {
+  appearance: none; -webkit-appearance: none;
+  background: var(--surface-3); border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 28px 5px 12px; font-size: 12px; color: var(--text);
+}
+
+/* ── Mode toggle (脱敏 / 透明) ──────────────────────────────────────────────── */
+.mode-btn {
+  position: relative; overflow: hidden;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 14px 7px 12px; border-radius: var(--radius-sm);
+  border: 1px solid transparent; cursor: pointer;
+  font-size: 13px; font-weight: 600; line-height: 1;
+  transition: transform .08s, background .25s, border-color .25s, color .25s, box-shadow .25s;
+}
+.mode-btn:active { transform: translateY(1px); }
+.mode-btn .mode-ico { display: inline-flex; }
+.mode-btn .mode-ico svg { width: 15px; height: 15px; }
+.mode-btn .ico-eye { display: none; }
+.mode-btn[data-mode="transparent"] .ico-shield { display: none; }
+.mode-btn[data-mode="transparent"] .ico-eye { display: inline; }
+.mode-btn .mode-text { position: relative; z-index: 1; }
+
+/* Desensitize: a vertical security "scan" sweep over a green tint */
+.mode-btn[data-mode="desensitize"] {
+  color: var(--green);
+  border-color: rgba(52,211,153,.4);
+  background: rgba(52,211,153,.10);
+  box-shadow: 0 0 0 1px rgba(52,211,153,.06), 0 6px 18px -10px rgba(52,211,153,.5);
+}
+.mode-btn[data-mode="desensitize"]::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 45%; top: -45%;
+  background: linear-gradient(180deg, transparent, rgba(52,211,153,.30), transparent);
+  animation: scan 2.2s linear infinite;
+}
+@keyframes scan { to { top: 145%; } }
+
+/* Transparent: a horizontal "pass-through" shimmer over an amber tint */
+.mode-btn[data-mode="transparent"] {
+  color: var(--yellow);
+  border-color: rgba(251,191,36,.42);
+  background: rgba(251,191,36,.10);
+  box-shadow: 0 0 0 1px rgba(251,191,36,.06), 0 6px 18px -10px rgba(251,191,36,.5);
+}
+.mode-btn[data-mode="transparent"]::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent 20%, rgba(251,191,36,.22), transparent 80%);
+  background-size: 220% 100%;
+  animation: flow 2.4s linear infinite;
+}
+@keyframes flow { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+.mode-btn:hover { filter: brightness(1.08); }
+
+/* ── Theme toggle (sun / moon) ──────────────────────────────────────────────── */
+.theme-btn {
+  display: grid; place-items: center; width: 36px; height: 34px;
+  background: transparent; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s, transform .08s;
+}
+.theme-btn:hover { color: var(--text); border-color: var(--text-faint); background: var(--btn-outline-hover); }
+.theme-btn:active { transform: translateY(1px); }
+.theme-btn svg { width: 17px; height: 17px; transition: transform .35s ease, opacity .25s; }
+.theme-btn .ico-sun { display: none; }
+.theme-btn .ico-moon { display: block; }
+:root[data-theme="light"] .theme-btn .ico-sun { display: block; }
+:root[data-theme="light"] .theme-btn .ico-moon { display: none; }
+.theme-btn:hover svg { transform: rotate(35deg); }
 
 /* ── Layout ─────────────────────────────────────────────────────────────── */
 main { padding: 24px 28px 48px; display: flex; flex-direction: column; gap: 18px; max-width: 1380px; margin: 0 auto; }
@@ -224,6 +310,10 @@ input:checked + .toggle-slider::before { transform: translateX(17px); }
 }
 .scroll-y::-webkit-scrollbar-thumb:hover, .modal-body::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: padding-box; }
 .scroll-y::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-btn::after { animation: none; }
+}
 
 @media (max-width: 760px) {
   .test-results { grid-template-columns: 1fr; }

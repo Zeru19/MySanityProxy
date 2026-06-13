@@ -11,12 +11,13 @@ function applyTheme(theme) {
   const root = document.documentElement;
   if (theme === "light") root.setAttribute("data-theme", "light");
   else root.removeAttribute("data-theme");
-  const btn = document.getElementById("btn-theme-toggle");
-  if (btn) btn.textContent = theme === "light" ? "☀️" : "🌙";
 }
 
 (function initTheme() {
-  let theme = localStorage.getItem("sanity-theme");
+  const override = new URLSearchParams(location.search).get("theme");
+  let theme = (override === "light" || override === "dark")
+    ? override
+    : localStorage.getItem("sanity-theme");
   if (!theme) {
     theme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
   }
@@ -101,16 +102,19 @@ document.getElementById("selfcheck-policy").addEventListener("change", async (e)
 function applyMode(mode) {
   currentMode = mode;
   const label = document.getElementById("mode-label");
-  const dot = document.querySelector(".dot");
+  const dot = document.querySelector(".stat-pill .dot");
   const toggleBtn = document.getElementById("btn-mode-toggle");
+  const modeText = toggleBtn.querySelector(".mode-text");
   if (mode === "desensitize") {
     label.textContent = "脱敏模式";
     dot.className = "dot dot-green";
-    toggleBtn.textContent = "切换透明模式";
+    toggleBtn.dataset.mode = "desensitize";
+    modeText.textContent = "脱敏模式";
   } else {
     label.textContent = "透明模式";
     dot.className = "dot dot-yellow";
-    toggleBtn.textContent = "切换脱敏模式";
+    toggleBtn.dataset.mode = "transparent";
+    modeText.textContent = "透明模式";
   }
 }
 

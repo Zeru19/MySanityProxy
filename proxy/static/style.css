@@ -19,13 +19,42 @@
   --radius-sm: 8px;
   --shadow: 0 1px 0 rgba(255,255,255,.02) inset, 0 10px 30px -16px rgba(0,0,0,.7);
   --pad: 16px 20px;
+  --glow: rgba(139,123,255,.10);
+  --header-bg: rgba(17,20,28,.72);
+  --code: #c6d0e2;
+  --row-stripe: rgba(255,255,255,.014);
+  --btn-outline-hover: rgba(255,255,255,.03);
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f6fb;
+  --surface: #ffffff;
+  --surface-2: #f0f2f8;     /* sticky header rows / inputs */
+  --surface-3: #e8ecf5;     /* hover */
+  --border: #e2e6ef;
+  --border-strong: #cdd3e0;
+  --text: #1a1f2b;
+  --text-muted: #5a6477;
+  --text-faint: #8a93a6;
+  --accent: #3b7de0;
+  --accent-2: #6d5ef0;
+  --green: #0fa968;
+  --red: #e0483f;
+  --yellow: #c98a06;
+  --shadow: 0 1px 2px rgba(16,24,40,.04), 0 10px 30px -18px rgba(16,24,40,.25);
+  --glow: rgba(109,94,240,.07);
+  --header-bg: rgba(255,255,255,.78);
+  --code: #344056;
+  --row-stripe: rgba(16,24,40,.015);
+  --btn-outline-hover: rgba(16,24,40,.03);
 }
 
 html { scrollbar-gutter: stable; }
 body {
   background:
-    radial-gradient(900px 420px at 88% -120px, rgba(139,123,255,.10), transparent 70%),
+    radial-gradient(900px 420px at 88% -120px, var(--glow), transparent 70%),
     var(--bg);
+  transition: background-color .2s, color .2s;
   background-attachment: fixed;
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -37,7 +66,7 @@ body {
 header {
   display: flex; align-items: center; gap: 18px;
   padding: 14px 28px;
-  background: rgba(17,20,28,.72);
+  background: var(--header-bg);
   backdrop-filter: saturate(140%) blur(12px);
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 50; flex-wrap: wrap;
@@ -106,7 +135,7 @@ thead th {
 .scroll-y thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-2); }
 tbody td { padding: 10px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; font-variant-numeric: tabular-nums; }
 tbody tr { transition: background .12s; }
-tbody tr:nth-child(even) { background: rgba(255,255,255,.014); }
+tbody tr:nth-child(even) { background: var(--row-stripe); }
 tbody tr:hover { background: var(--surface-3); }
 tbody tr:last-child td { border-bottom: none; }
 
@@ -132,7 +161,7 @@ td .badge:not([class*="badge-"]) { color: var(--text-muted); background: var(--s
 .btn:active { transform: translateY(1px); }
 .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 6px 18px -8px rgba(91,157,249,.7); }
 .btn-outline { background: transparent; color: var(--text-muted); border-color: var(--border-strong); }
-.btn-outline:hover { color: var(--text); border-color: var(--text-faint); background: rgba(255,255,255,.03); }
+.btn-outline:hover { color: var(--text); border-color: var(--text-faint); background: var(--btn-outline-hover); }
 .btn-sm { padding: 4px 11px; font-size: 12px; background: var(--surface-2); color: var(--text-muted); border-color: var(--border); }
 .btn-sm:hover { color: var(--text); border-color: var(--border-strong); }
 .btn-danger { background: rgba(248,113,113,.12); color: var(--red); border-color: rgba(248,113,113,.3); }
@@ -156,7 +185,7 @@ td .badge:not([class*="badge-"]) { color: var(--text-muted); background: var(--s
 .result-block pre {
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 13px; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; min-height: 60px;
-  font-family: "Menlo", "Consolas", monospace; color: #c6d0e2; line-height: 1.6;
+  font-family: "Menlo", "Consolas", monospace; color: var(--code); line-height: 1.6;
 }
 
 /* ── Modal ──────────────────────────────────────────────────────────────── */
@@ -184,7 +213,7 @@ input:checked + .toggle-slider { background: linear-gradient(135deg, var(--green
 input:checked + .toggle-slider::before { transform: translateX(17px); }
 
 /* ── Utilities ──────────────────────────────────────────────────────────── */
-.mono { font-family: "Menlo", "Consolas", monospace; font-size: 12px; color: #b3bdd1; }
+.mono { font-family: "Menlo", "Consolas", monospace; font-size: 12px; color: var(--text-muted); }
 .truncate { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 
 /* ── Scrollbars ─────────────────────────────────────────────────────────── */

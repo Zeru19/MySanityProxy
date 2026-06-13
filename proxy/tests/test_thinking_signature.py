@@ -74,6 +74,31 @@ def test_thinking_and_signature_byte_identical_through_pipeline():
     print("\n[PASS] thinking / signature / tool id 全程逐字节不变")
 
 
+def test_image_base64_not_corrupted_by_remask():
+    """图片/二进制：image 块与 base64 数据源绝不能被脱敏改写——否则 base64 损坏、
+    上游判图片非法（这正是「经代理后读图失败」的根因）。"""
+    import base64
+    rules = _rules()
+    # 构造一段必然命中长数字/护照规则的 base64（数字串 + 双字母7数字）
+    blob = base64.b64encode(b"0123456789012345678 GG1234567 " * 200).decode()
+    body = {
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": blob}},
+            {"type": "text", "text": "被告人李明，请描述这张图"},
+        ]}],
+    }
+    masked, _ = desensitizer.desensitize(body, rules)
+    assert masked["messages"][0]["content"][0]["source"]["data"] == blob, "desensitize 不应碰 base64"
+
+    out, _, _ = desensitizer.remask_residual(json.dumps(masked, ensure_ascii=False).encode(), rules)
+    mo = json.loads(out)
+    assert mo["messages"][0]["content"][0]["source"]["data"] == blob, "remask 改坏了 base64 图片数据！"
+    # 而同一请求里的文本 PII 仍被脱敏
+    assert "李明" not in json.dumps(mo, ensure_ascii=False)
+    print("\n[PASS] image/base64 数据完好，文本 PII 照常脱敏")
+
+
 def test_remask_still_masks_residual_pii_outside_known_fields():
     """广覆盖不能丢：藏在顶层非常规字段的漏网 PII 仍要被补脱。"""
     rules = _rules()

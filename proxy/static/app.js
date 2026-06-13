@@ -6,6 +6,29 @@ let totalReqs = 0;
 let totalHits = 0;
 let currentMode = "desensitize";
 
+// ── Theme (light/dark) ───────────────────────────────────────────────────────
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "light") root.setAttribute("data-theme", "light");
+  else root.removeAttribute("data-theme");
+  const btn = document.getElementById("btn-theme-toggle");
+  if (btn) btn.textContent = theme === "light" ? "☀️" : "🌙";
+}
+
+(function initTheme() {
+  let theme = localStorage.getItem("sanity-theme");
+  if (!theme) {
+    theme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  applyTheme(theme);
+})();
+
+document.getElementById("btn-theme-toggle").addEventListener("click", () => {
+  const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+  localStorage.setItem("sanity-theme", next);
+  applyTheme(next);
+});
+
 // ── Stat counters ────────────────────────────────────────────────────────────
 function updateStats(entry) {
   totalReqs++;

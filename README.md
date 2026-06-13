@@ -64,6 +64,26 @@ open http://localhost:8080/dashboard
 ANTHROPIC_BASE_URL=http://localhost:8080 claude
 ```
 
+## 运行效果
+
+成功启动后，终端会打印监听地址、面板地址与当前模式，随后是 Uvicorn 的启动日志：
+
+```text
+SanityProxy starting on http://127.0.0.1:8080
+Dashboard: http://127.0.0.1:8080/dashboard
+Mode: desensitize
+INFO:     Started server process [12345]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8080 (Press CTRL+C to quit)
+```
+
+打开 `http://localhost:8080/dashboard`，即可在监控面板里看到实时请求日志、出站审计、规则管理与规则测试：
+
+![SanityProxy 监控面板](docs/images/dashboard-1.png)
+
+![SanityProxy 监控面板 — 出站审计 / 规则](docs/images/dashboard-2.png)
+
 ## 验证是否生效
 
 ```bash

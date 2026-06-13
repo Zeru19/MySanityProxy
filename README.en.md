@@ -64,6 +64,26 @@ open http://localhost:8080/dashboard
 ANTHROPIC_BASE_URL=http://localhost:8080 claude
 ```
 
+## What it looks like
+
+On a successful start the terminal prints the listen address, dashboard URL, and current mode, followed by Uvicorn's startup log:
+
+```text
+SanityProxy starting on http://127.0.0.1:8080
+Dashboard: http://127.0.0.1:8080/dashboard
+Mode: desensitize
+INFO:     Started server process [12345]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8080 (Press CTRL+C to quit)
+```
+
+Open `http://localhost:8080/dashboard` for the live request log, outbound audit, rule manager, and rule tester:
+
+![SanityProxy dashboard](docs/images/dashboard-1.png)
+
+![SanityProxy dashboard — outbound audit / rules](docs/images/dashboard-2.png)
+
 ## Verify it's working
 
 ```bash

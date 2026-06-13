@@ -32,6 +32,14 @@
           </select>
         </span>
       </label>
+      <label class="selfcheck-control" id="name-detection-control" title="用 jieba 分词补召回没有角色词引导的裸姓名（概率性增强，可随时关闭回纯规则）">
+        <svg class="sc-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3"/><path d="M3 21v-1a6 6 0 0 1 7-6"/><path d="M15 11l2 2 4-4"/></svg>
+        <span class="sc-text">姓名识别</span>
+        <span class="toggle">
+          <input type="checkbox" id="name-detection-toggle" />
+          <span class="toggle-slider"></span>
+        </span>
+      </label>
       <button class="mode-btn" id="btn-mode-toggle" data-mode="desensitize" title="点击切换 脱敏 / 透明 模式">
         <span class="mode-ico">
           <svg class="ico-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>

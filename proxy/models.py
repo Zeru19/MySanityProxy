@@ -34,6 +34,10 @@ class SelfCheckUpdate(BaseModel):
     policy: str  # "block" | "remask" | "off"
 
 
+class NameDetectionUpdate(BaseModel):
+    enabled: bool  # 智能姓名识别（jieba）开关
+
+
 class LogEntry(BaseModel):
     id: str
     timestamp: str

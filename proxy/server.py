@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 import config
 import desensitizer
 import storage
-from models import RuleCreate, RuleTest, ModeUpdate, SelfCheckUpdate
+from models import RuleCreate, RuleTest, ModeUpdate, SelfCheckUpdate, NameDetectionUpdate
 
 app = FastAPI(title="SanityProxy")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -26,6 +26,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 _current_mode = config.MODE
 # 出站自检策略：block=命中即拦截(fail-closed) | remask=补脱后放行 | off=仅告警放行
 _current_selfcheck = "remask"
+# 智能姓名识别（jieba 分词补召回裸姓名），默认开启；jieba 不可用时自动降级为纯 regex
+_name_detection = True
 _http_client: Optional[httpx.AsyncClient] = None
 
 
@@ -34,9 +36,22 @@ async def startup():
     global _http_client
     _http_client = httpx.AsyncClient(timeout=120.0)
     await storage.get_db()  # init DB + seed built-in rules
-    global _current_mode, _current_selfcheck
+    global _current_mode, _current_selfcheck, _name_detection
     _current_mode = await storage.get_setting("mode", config.MODE)
     _current_selfcheck = await storage.get_setting("selfcheck", _current_selfcheck)
+    _name_detection = (await storage.get_setting("name_detection", "on")) == "on"
+    # 预热 jieba 字典：把首次 ~1s 的加载从首个真实请求挪到启动期
+    if _name_detection and desensitizer._HAS_JIEBA:
+        await asyncio.to_thread(_prewarm_jieba)
+
+
+def _prewarm_jieba():
+    try:
+        desensitizer.jieba.initialize()
+        list(desensitizer._pseg.cut("张三"))  # 触发 HMM/词典加载
+        print("jieba name detection: warmed up")
+    except Exception as exc:  # pragma: no cover
+        print(f"jieba warmup skipped: {exc}")
 
 
 @app.on_event("shutdown")
@@ -76,7 +91,9 @@ async def proxy(request: Request, path: str):
         reg = desensitizer.new_registry()
         try:
             body_json = json.loads(body_bytes)
-            masked_body, session_mapping = desensitizer.desensitize(body_json, rules, reg)
+            # 脱敏含 jieba 分词时是 CPU 密集且同步，卸到线程，避免阻塞事件循环、拖慢并发。
+            masked_body, session_mapping = await asyncio.to_thread(
+                desensitizer.desensitize, body_json, rules, reg, _name_detection)
             hits = len(session_mapping)
             masked_body_bytes = json.dumps(masked_body, ensure_ascii=False).encode()
         except Exception:
@@ -387,7 +404,12 @@ async def stream_logs(request: Request):
 
 @app.get("/dashboard/api/status")
 async def get_status():
-    return {"mode": _current_mode, "selfcheck": _current_selfcheck}
+    return {
+        "mode": _current_mode,
+        "selfcheck": _current_selfcheck,
+        "name_detection": _name_detection,
+        "name_detection_available": desensitizer._HAS_JIEBA,
+    }
 
 
 @app.post("/dashboard/api/mode")
@@ -408,6 +430,17 @@ async def set_selfcheck(body: SelfCheckUpdate):
     _current_selfcheck = body.policy
     await storage.set_setting("selfcheck", body.policy)
     return {"selfcheck": _current_selfcheck}
+
+
+@app.post("/dashboard/api/name-detection")
+async def set_name_detection(body: NameDetectionUpdate):
+    global _name_detection
+    _name_detection = bool(body.enabled)
+    await storage.set_setting("name_detection", "on" if _name_detection else "off")
+    # 首次开启时预热 jieba，避免下一个请求承担字典加载延迟
+    if _name_detection and desensitizer._HAS_JIEBA:
+        await asyncio.to_thread(_prewarm_jieba)
+    return {"name_detection": _name_detection, "available": desensitizer._HAS_JIEBA}
 
 
 @app.get("/dashboard/api/snapshots")

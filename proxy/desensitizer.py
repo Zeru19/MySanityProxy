@@ -7,6 +7,23 @@ try:
 except ImportError:
     import re
 
+# jieba 中文分词（软依赖）：用词性标注补召回「没有角色词引导」的裸姓名。
+# 装不上时自动降级为纯 regex，绝不影响代理运行。
+try:
+    import jieba  # noqa
+    import jieba.posseg as _pseg
+    jieba.setLogLevel(60)  # 静音字典加载日志
+    _HAS_JIEBA = True
+except Exception:  # pragma: no cover - 仅在未安装 jieba 时触发
+    _pseg = None
+    _HAS_JIEBA = False
+
+# jieba 判定为人名的词性标签（人名 / 音译人名 / 姓氏类）
+_NAME_POS = frozenset({"nr", "nrfg", "nrt"})
+# 只把「形如姓名」的 token 当姓名：2–4 个中文字（与 rules.py 姓名规则一致），
+# 过滤掉单字/拉丁/标点等误判，降低过脱。
+_NAME_SHAPE = re.compile(r"^[一-龥]{2,4}$")
+
 # Canonical category key for tag naming
 _CATEGORY_KEYS = {
     "个人身份": "PERSON",
@@ -46,8 +63,42 @@ def _make_tag(category: str, value: str, reg: dict) -> str:
     return tag
 
 
-def _desensitize_text(text: str, rules: list[dict], reg: dict) -> tuple[str, dict[str, str]]:
-    """Apply all rules to text. Returns (masked_text, local_mapping{tag:value})."""
+def _jieba_name_pass(text: str, reg: dict, local_mapping: dict[str, str]) -> str:
+    """在 regex 之后追加一趟 jieba 姓名识别（token 级，与 regex 协同）。
+
+    对 regex 处理后的文本做词性标注，单趟重组：
+      · token 被标为人名（_NAME_POS）且形如姓名 → 替换为 [[SANITY_PERSON_*]]；
+      · token 文本 == 本段已确认的某个姓名 → 同样替换（token 级兜底，覆盖没有角色词
+        引导的重复出现，如「…，张三喝了一瓶啤酒」里的张三）。
+    jieba 只切分、不改字符，重组即原文，因此既不丢字、也不破坏已有 [[SANITY_*]] 标签
+    （标签会被切成 '['/'SANITY'/数字 等碎片，但都不是姓名 token，原样拼回）。
+
+    token 粒度是关键：「高强度」是一个 token（≠「高强」），即便「高强」是已确认姓名，
+    也不会被切碎——从根上避免了子串过脱。
+    """
+    # 本段已确认的姓名：regex 阶段产出的、形如姓名(纯中文 2–4 字)的值。
+    # 身份证/手机/护照等值是数字或含字母，不会命中 _NAME_SHAPE，天然排除。
+    confirmed = {v for v in local_mapping.values() if _NAME_SHAPE.match(v)}
+    out: list[str] = []
+    for word, flag in _pseg.cut(text):
+        is_name = (flag in _NAME_POS and bool(_NAME_SHAPE.match(word))) or (word in confirmed)
+        if is_name:
+            tag = _make_tag("个人身份", word, reg)
+            local_mapping[tag] = word
+            confirmed.add(word)
+            out.append(tag)
+        else:
+            out.append(word)
+    return "".join(out)
+
+
+def _desensitize_text(text: str, rules: list[dict], reg: dict,
+                      name_detect: bool = False) -> tuple[str, dict[str, str]]:
+    """Apply all rules to text. Returns (masked_text, local_mapping{tag:value}).
+
+    name_detect=True 时，在 regex 规则之后追加一趟 jieba 姓名识别（_jieba_name_pass），
+    补召回没有角色词引导的裸姓名；jieba 不可用时静默跳过（纯 regex）。
+    """
     local_mapping: dict[str, str] = {}
     result = text
     for rule in rules:
@@ -70,6 +121,8 @@ def _desensitize_text(text: str, rules: list[dict], reg: dict) -> tuple[str, dic
             result = re.sub(pattern, replacer, result)
         except re.error:
             continue
+    if name_detect and _HAS_JIEBA:
+        result = _jieba_name_pass(result, reg, local_mapping)
     return result, local_mapping
 
 
@@ -136,13 +189,15 @@ def _set_nested(obj: Any, path: list, value: Any):
     obj[path[-1]] = value
 
 
-def desensitize(body: dict, rules: list[dict], reg: Optional[dict] = None) -> tuple[dict, dict[str, str]]:
+def desensitize(body: dict, rules: list[dict], reg: Optional[dict] = None,
+                name_detect: bool = False) -> tuple[dict, dict[str, str]]:
     """
     Desensitize all message content in a Messages API request body.
     Returns (masked_body, combined_local_mapping).
 
     reg：每请求脱敏注册表；调用方可传入同一份给后续 remask_residual，确保两趟脱敏
     标签编号连续、同值同标签（不传则内部新建一份）。
+    name_detect：是否在 regex 之后追加 jieba 姓名识别（补召回裸姓名）。
     """
     masked = copy.deepcopy(body)
     if reg is None:
@@ -156,7 +211,7 @@ def desensitize(body: dict, rules: list[dict], reg: Optional[dict] = None) -> tu
             continue
         segments = _extract_text_from_content(content)
         for path, text in segments:
-            masked_text, local = _desensitize_text(text, rules, reg)
+            masked_text, local = _desensitize_text(text, rules, reg, name_detect)
             combined_mapping.update(local)
             if path:
                 _set_nested(msg["content"], path, masked_text)
@@ -166,13 +221,13 @@ def desensitize(body: dict, rules: list[dict], reg: Optional[dict] = None) -> tu
     # Also desensitize the system prompt if present
     system = masked.get("system")
     if isinstance(system, str):
-        masked_system, local = _desensitize_text(system, rules, reg)
+        masked_system, local = _desensitize_text(system, rules, reg, name_detect)
         combined_mapping.update(local)
         masked["system"] = masked_system
     elif isinstance(system, list):
         for block in system:
             if isinstance(block, dict) and block.get("type") == "text":
-                masked_text, local = _desensitize_text(block["text"], rules, reg)
+                masked_text, local = _desensitize_text(block["text"], rules, reg, name_detect)
                 combined_mapping.update(local)
                 block["text"] = masked_text
 

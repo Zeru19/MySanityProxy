@@ -200,6 +200,8 @@ def _walk_maskable(obj: Any, base_path: list, skip_top_keys: frozenset = frozens
 
     与 _walk_strings 的区别：跳过绝不能动的字段——
       · thinking / redacted_thinking 整块（含 signature 与 thinking 文本）
+      · image 块、以及任意 base64 数据源（source.type=="base64" 的 data）——二进制，
+        不是文本 PII；扫它一来无意义，二来正则凑巧命中会把 base64 改坏、令图片/文档非法
       · 任意位置的结构性键（signature / tool_use_id / id / type / cache_control）
       · tool_use 块的 name（工具名须与 tools 定义一致），但照常遍历其 input
       · 顶层的 skip_top_keys（请求侧传入框架字段 tools/model/metadata）
@@ -211,11 +213,15 @@ def _walk_maskable(obj: Any, base_path: list, skip_top_keys: frozenset = frozens
     if isinstance(obj, str):
         out.append((base_path, obj))
     elif isinstance(obj, dict):
-        if obj.get("type") in _PROTECTED_BLOCK_TYPES:
+        btype = obj.get("type")
+        if btype in _PROTECTED_BLOCK_TYPES or btype == "image":
             return out
-        is_tool_use = obj.get("type") == "tool_use"
+        is_tool_use = btype == "tool_use"
+        is_base64_source = btype == "base64"   # {"type":"base64","media_type":..,"data":..}
         for k, v in obj.items():
             if k in _STRUCTURAL_KEYS:
+                continue
+            if is_base64_source and k == "data":
                 continue
             if is_tool_use and k == "name":
                 continue

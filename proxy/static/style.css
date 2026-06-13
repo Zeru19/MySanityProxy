@@ -300,7 +300,7 @@ input:checked + .toggle-slider::before { transform: translateX(17px); }
 
 /* ── Utilities ──────────────────────────────────────────────────────────── */
 .mono { font-family: "Menlo", "Consolas", monospace; font-size: 12px; color: var(--text-muted); }
-.truncate { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.truncate { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
 
 /* ── Scrollbars ─────────────────────────────────────────────────────────── */
 .scroll-y, .modal-body, #snap-body-pre { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }

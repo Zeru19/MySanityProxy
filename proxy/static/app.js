@@ -50,7 +50,7 @@ function appendLog(entry) {
   const modeLabel = entry.mode === "desensitize" ? "脱敏" : "透明";
   tr.innerHTML = `
     <td>${entry.timestamp}</td>
-    <td class="mono truncate">${entry.path || "messages"}</td>
+    <td class="mono"><span class="truncate">${entry.path || "messages"}</span></td>
     <td>${entry.latency_ms}</td>
     <td>${entry.input_tokens || 0}</td>
     <td>${entry.output_tokens || 0}</td>
@@ -160,7 +160,7 @@ function renderSnapshots() {
     else checkBadge = `<span class="badge badge-green">通过</span>`;
     tr.innerHTML = `
       <td class="mono">${s.timestamp}</td>
-      <td class="mono truncate">${escapeHtml(s.path)}</td>
+      <td class="mono"><span class="truncate">${escapeHtml(s.path)}</span></td>
       <td>${s.size}</td>
       <td>${s.hits}</td>
       <td>${checkBadge}</td>
@@ -253,7 +253,7 @@ function renderRules() {
       </td>
       <td>${rule.name}</td>
       <td>${rule.category}</td>
-      <td class="mono truncate" title="${rule.pattern}">${rule.pattern}</td>
+      <td class="mono" title="${rule.pattern}"><span class="truncate">${rule.pattern}</span></td>
       <td>${rule.preserve_prefix}</td>
       <td>${sourceLabel}</td>
       <td>${deleteBtn}</td>

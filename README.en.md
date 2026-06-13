@@ -78,11 +78,11 @@ INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8080 (Press CTRL+C to quit)
 ```
 
-Open `http://localhost:8080/dashboard` for the live request log, outbound audit, rule manager, and rule tester:
+Open `http://localhost:8080/dashboard` for the live request log, outbound audit, rule manager, and rule tester (with one-click light/dark theme):
 
-![SanityProxy dashboard](docs/images/dashboard-1.png)
-
-![SanityProxy dashboard — outbound audit / rules](docs/images/dashboard-2.png)
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="SanityProxy dashboard" width="860" />
+</p>
 
 ## Verify it's working
 

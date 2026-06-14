@@ -89,6 +89,23 @@ async function fetchStatus() {
   const data = await res.json();
   applyMode(data.mode);
   if (data.selfcheck) document.getElementById("selfcheck-policy").value = data.selfcheck;
+  applyNameDetection(data);
+}
+
+function applyNameDetection(data) {
+  const toggle = document.getElementById("name-detection-toggle");
+  const ctrl = document.getElementById("name-detection-control");
+  if (!toggle) return;
+  toggle.checked = !!data.name_detection;
+  // jieba 未安装时禁用开关并提示
+  if (data.name_detection_available === false) {
+    toggle.checked = false;
+    toggle.disabled = true;
+    if (ctrl) {
+      ctrl.style.opacity = "0.5";
+      ctrl.title = "未安装 jieba，姓名识别不可用（pip install jieba 后重启代理）";
+    }
+  }
 }
 
 document.getElementById("selfcheck-policy").addEventListener("change", async (e) => {
@@ -96,6 +113,14 @@ document.getElementById("selfcheck-policy").addEventListener("change", async (e)
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ policy: e.target.value }),
+  });
+});
+
+document.getElementById("name-detection-toggle").addEventListener("change", async (e) => {
+  await fetch(`${API}/name-detection`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: e.target.checked }),
   });
 });
 

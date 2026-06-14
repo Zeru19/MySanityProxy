@@ -242,6 +242,16 @@ UPSTREAM_URL = "https://your-compatible-api.example.com"
 
 脱敏作用于两个端点：`POST /v1/messages`（含流式）与 `POST /v1/messages/count_tokens`——两者携带同样的对话内容，**count_tokens 也必须脱敏**，否则 token 计数请求会把原文 PII 直接外发。
 
+### 智能姓名识别（jieba，默认开启）
+
+角色词规则（`被告人X` 等）只脱「角色词紧邻」的姓名，**没有角色词引导的裸姓名会漏**（如「…，张三喝了一瓶啤酒」里的张三）。开启「智能姓名识别」后，在 regex 之后追加一趟 `jieba.posseg` 词性标注：把判定为人名（`nr/nrfg/nrt`）且形如姓名（2–4 中文字）的 **token** 也脱，并对本请求内已确认的姓名做 **token 级**全文兜底。
+
+- **token 粒度**是关键：`高强度` 是一个 token（≠`高强`），即便`高强`是已确认姓名也不会被切碎——从根上避免子串过脱。
+- **概率性增强、非 fail-closed**：jieba 会漏判生僻/三字/复姓/音译名，也会误判（误判属安全偏向，`restore` 可逆）；角色词 regex 仍是确定性补充。
+- 面板右上角「姓名识别」开关，持久化在 `sanity.db`（key `name_detection`）；API：`POST /dashboard/api/name-detection` body `{"enabled":bool}`。
+- 依赖 `jieba`（软依赖）：未安装时**自动降级为纯 regex**、不报错；面板开关会置灰。jieba 含 CPU 密集分词，已在 `server.py` 用 `asyncio.to_thread` 卸出事件循环，并在启动时预热字典。
+- **切勿把每请求识别出的姓名写入 jieba 全局词典**（`jieba.add_word`）——会跨请求驻留 PII。用户自维护的「已知姓名表」属未来项。
+
 在此之上，代理**转发前**再做一道自检兜底。自检核对**整段会上云的请求体**，仅跳过 `tools`/`model`/`metadata` 三个确知合法携带示例邮箱/长数字的框架字段（避免假阳性 403）。这样即便 PII 藏在结构化脱敏够不到的位置（顶层非常规字段、未知 content 块类型等），`block`/`off` 也能发现——避免"最严档反而漏"的盲区。处理策略可在面板右上角「出站自检」下拉切换，持久化在 `sanity.db`：
 
 | 策略 | 行为 | 适用 |

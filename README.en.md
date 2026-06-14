@@ -103,6 +103,7 @@ The web dashboard at `http://localhost:8080/dashboard` provides:
 - Real-time request log — fixed-height, scrollable panel with a sticky header and live row counter (token counts now populate for streaming requests)
 - Outbound audit — snapshots of what was actually sent upstream (after masking); retain the last 20 / 100 / 200 / 500 / all
 - Self-check policy switch — remask (default) / block (fail-closed) / off
+- Smart name detection — toggle (on by default): a jieba word-segmentation pass that recalls bare names with no role-word cue (beyond the regex rules), at token granularity so words like 高强度 aren't broken; a probabilistic add-on, one click to turn off
 - Rule manager — enable/disable rules, add custom patterns, import/export JSON
 - Rule tester — paste text and preview desensitization output instantly
 - Mode toggle — switch between desensitize and transparent mode

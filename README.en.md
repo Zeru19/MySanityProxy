@@ -153,6 +153,8 @@ To use a third-party model, just set the model name on the Claude Code side — 
 ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_MODEL=deepseek-v4-flash claude
 ```
 
+> **Let Claude Code configure it for you**: inside this project, just say "set up / connect DeepSeek / connect GLM" — the agent first **scans your environment variables** (presence only, never echoing the key) to decide native vs third-party and sets up sensible defaults. See `AGENTS.md` → "首次配置：扫描环境、自动选择上游".
+
 Each route supports `model_rewrite` (rewrite `model` to the upstream's real name before forwarding). The live log and outbound audit gain an "upstream" column showing where each request went.
 
 **Caveats**: DeepSeek/GLM don't document `count_tokens`, so the proxy returns a **local estimate** for upstreams that don't support it (avoids 404s); `thinking`/`signature` still round-trip byte-for-byte, but Anthropic's encrypted-signature semantics don't hold on third parties. OpenAI-format (non-Anthropic) upstreams need protocol translation and are out of scope here (chain a translator like claude-code-router / LiteLLM in front).

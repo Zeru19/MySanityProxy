@@ -153,6 +153,8 @@ export GLM_API_KEY=...           # 智谱 GLM（Z.AI / BigModel）
 ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_MODEL=deepseek-v4-flash claude
 ```
 
+> **让 Claude Code 自动配置**：在本项目里直接说「帮我配置 / 接入 DeepSeek / 接入 GLM」，agent 会**先扫描环境变量**（只看是否设置、不回显 key）判定走原生还是第三方，并默认配置好——详见 `AGENTS.md` 的〔首次配置：扫描环境、自动选择上游〕。
+
 每条路由支持 `model_rewrite`（转发前把 `model` 改成上游真实模型名）。实时日志与出站审计都新增「上游」列，标明每条请求去了哪个上游。
 
 **边角提示**：DeepSeek/GLM 的 `count_tokens` 未文档化，代理对不支持该端点的上游做**本地粗略估算**兜底（避免 404）；`thinking`/`signature` 仍逐字节透传不改，但 Anthropic 的加密签名语义在第三方上并不成立。OpenAI 格式（非 Anthropic）的上游需要协议转换，暂不在本工具范围内（可在前面再串 claude-code-router / LiteLLM 等翻译层）。

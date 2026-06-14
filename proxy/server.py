@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -18,7 +19,9 @@ from fastapi.staticfiles import StaticFiles
 import config
 import desensitizer
 import storage
-from models import RuleCreate, RuleTest, ModeUpdate, SelfCheckUpdate, NameDetectionUpdate
+import routing
+from models import (RuleCreate, RuleTest, ModeUpdate, SelfCheckUpdate,
+                    NameDetectionUpdate, UpstreamCreate, RouteCreate)
 
 app = FastAPI(title="SanityProxy")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -84,6 +87,17 @@ async def proxy(request: Request, path: str):
     # 两者都必须脱敏，否则 token 计数请求会原文外泄 PII。
     should_mask = request.method == "POST" and path in ("messages", "messages/count_tokens")
 
+    # 取出请求体里的 model，按 model 路由到对应上游（在脱敏/记快照之前定下，
+    # 这样审计快照与日志都能标明这条请求发往了哪个上游）。
+    req_model = None
+    if request.method == "POST" and path in ("messages", "messages/count_tokens"):
+        try:
+            req_model = json.loads(body_bytes).get("model")
+        except Exception:
+            req_model = None
+    resolved = await routing.resolve(req_model)
+    upstream_name = resolved.name
+
     if should_mask and _current_mode == "desensitize":
         rules = await storage.get_enabled_rules()
         # 每请求一份注册表，贯穿 desensitize→remask 两趟（编号连续、同值同标签），
@@ -100,8 +114,9 @@ async def proxy(request: Request, path: str):
             # fail-closed：脱敏模式下无法解析/脱敏请求体时，绝不放行原文
             _record_snapshot(req_id, path, body_bytes, 0,
                              status="blocked",
-                             leaks=[{"rule": "desensitize_error", "category": "", "sample": ""}])
-            _log(req_id, start, 403, 0, path)
+                             leaks=[{"rule": "desensitize_error", "category": "", "sample": ""}],
+                             upstream=upstream_name)
+            _log(req_id, start, 403, 0, path, upstream=upstream_name)
             return JSONResponse(
                 status_code=403,
                 content={"error": {"type": "sanity_blocked",
@@ -119,18 +134,21 @@ async def proxy(request: Request, path: str):
                 session_mapping.update(extra)
                 hits = len(session_mapping)
             _record_snapshot(req_id, path, masked_body_bytes, hits,
-                             status="remasked" if swept else "forwarded", leaks=swept)
+                             status="remasked" if swept else "forwarded", leaks=swept,
+                             upstream=upstream_name)
         elif _current_selfcheck == "off":
             # 仅扫内容区域、记录告警，不拦截
             leaks = desensitizer.detect_residual(masked_body, rules)
             _record_snapshot(req_id, path, masked_body_bytes, hits,
-                             status="warned" if leaks else "forwarded", leaks=leaks)
+                             status="warned" if leaks else "forwarded", leaks=leaks,
+                             upstream=upstream_name)
         else:
             # block：只扫会上云的用户内容（messages + system），不碰 tools/model/metadata
             leaks = desensitizer.detect_residual(masked_body, rules)
             if leaks:
-                _record_snapshot(req_id, path, masked_body_bytes, hits, status="blocked", leaks=leaks)
-                _log(req_id, start, 403, hits, path)
+                _record_snapshot(req_id, path, masked_body_bytes, hits, status="blocked",
+                                 leaks=leaks, upstream=upstream_name)
+                _log(req_id, start, 403, hits, path, upstream=upstream_name)
                 names = "、".join(sorted({l["rule"] for l in leaks}))
                 return JSONResponse(
                     status_code=403,
@@ -138,32 +156,83 @@ async def proxy(request: Request, path: str):
                                        "message": f"SanityProxy 出站自检拦截：检测到未脱敏的 PII（命中规则：{names}）。"
                                                   f"请到面板「出站审计」查看快照，或改用「补脱后放行」策略/补充规则。"}},
                 )
-            _record_snapshot(req_id, path, masked_body_bytes, hits, status="forwarded", leaks=[])
+            _record_snapshot(req_id, path, masked_body_bytes, hits, status="forwarded",
+                             leaks=[], upstream=upstream_name)
 
     # Determine if streaming
     is_stream = False
     if is_messages:
         try:
-            req_json = json.loads(body_bytes)
-            is_stream = req_json.get("stream", False)
+            is_stream = json.loads(body_bytes).get("stream", False)
         except Exception:
             pass
 
-    upstream_url = f"{config.UPSTREAM_URL}/v1/{path}"
+    # 可选 model 改写：转发前把请求体的 model 换成上游真实模型名
+    if resolved.model_rewrite and request.method == "POST" and path in ("messages", "messages/count_tokens"):
+        try:
+            rb = json.loads(masked_body_bytes)
+            rb["model"] = resolved.model_rewrite
+            masked_body_bytes = json.dumps(rb, ensure_ascii=False).encode()
+        except Exception:
+            pass
+
+    # count_tokens 兜底：上游不支持该端点时本地粗估，避免 404 让 Claude Code 失算
+    if path == "messages/count_tokens" and not resolved.supports_count_tokens:
+        est = _estimate_tokens(masked_body_bytes)
+        _log(req_id, start, 200, hits, path, input_tokens=est, upstream=upstream_name)
+        return JSONResponse(status_code=200, content={"input_tokens": est})
+
+    upstream_url = f"{resolved.base_url}/v1/{path}"
+    _apply_upstream_auth(headers, resolved)
 
     try:
         if is_stream:
             return await _handle_stream(
                 request, upstream_url, headers, masked_body_bytes,
-                session_mapping, start, req_id, hits
+                session_mapping, start, req_id, hits, upstream_name
             )
         else:
             return await _handle_json(
                 request, upstream_url, headers, masked_body_bytes,
-                session_mapping, start, req_id, hits, path
+                session_mapping, start, req_id, hits, path, upstream_name
             )
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Upstream error: {exc}")
+
+
+def _apply_upstream_auth(headers: dict, resolved: routing.ResolvedUpstream) -> None:
+    """按上游注入鉴权。拿不到 env key 时不动客户端原鉴权头（保持透传，兼容 Claude OAuth 登录）。"""
+    if not resolved.token:
+        return
+    for k in [k for k in headers if k.lower() in ("authorization", "x-api-key")]:
+        del headers[k]
+    if resolved.auth_scheme == "bearer":
+        headers["Authorization"] = f"Bearer {resolved.token}"
+    else:
+        headers["x-api-key"] = resolved.token
+
+
+def _estimate_tokens(body: bytes) -> int:
+    """上游不支持 count_tokens 时的本地粗略估算（仅兜底、非精确）：约每 3 字符 1 token。"""
+    try:
+        data = json.loads(body)
+    except Exception:
+        return max(1, len(body) // 4)
+    text_len = 0
+    sys = data.get("system")
+    if isinstance(sys, str):
+        text_len += len(sys)
+    elif isinstance(sys, list):
+        text_len += sum(len(b.get("text", "") or "") for b in sys if isinstance(b, dict))
+    for m in data.get("messages", []) or []:
+        c = m.get("content")
+        if isinstance(c, str):
+            text_len += len(c)
+        elif isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict):
+                    text_len += len(b.get("text", "") or "")
+    return max(1, text_len // 3)
 
 
 # 我们会读取（解压）并改写上游响应体，故这些描述「原始字节」的头不能原样回传，
@@ -182,7 +251,7 @@ def _usage_from(data: dict) -> tuple[int, int]:
 
 async def _handle_json(
     request: Request, url: str, headers: dict, body: bytes,
-    mapping: dict, start: float, req_id: str, hits: int, path: str
+    mapping: dict, start: float, req_id: str, hits: int, path: str, upstream_name: str = ""
 ) -> Response:
     resp = await _http_client.request(
         method=request.method,
@@ -204,7 +273,7 @@ async def _handle_json(
             pass
 
     _log(req_id, start, resp.status_code, hits, path,
-         input_tokens=input_tokens, output_tokens=output_tokens)
+         input_tokens=input_tokens, output_tokens=output_tokens, upstream=upstream_name)
 
     return Response(
         content=resp_content,
@@ -280,7 +349,7 @@ def _process_sse_event(block: str, state: dict, mapping: dict) -> tuple[str, lis
 
 async def _handle_stream(
     request: Request, url: str, headers: dict, body: bytes,
-    mapping: dict, start: float, req_id: str, hits: int
+    mapping: dict, start: float, req_id: str, hits: int, upstream_name: str = ""
 ) -> Response:
     # 先建立连接拿到状态码。上游若返回非 200（如 400 坏请求），它给的是一段 JSON 错误体、
     # 而非 SSE 流；此时必须把【真实状态码】回传给 Claude Code，否则 StreamingResponse 会以
@@ -296,7 +365,7 @@ async def _handle_stream(
             raw = await upstream.aread()
         finally:
             await upstream.aclose()
-        _log(req_id, start, upstream.status_code, hits, "messages")
+        _log(req_id, start, upstream.status_code, hits, "messages", upstream=upstream_name)
         return Response(
             content=raw,
             status_code=upstream.status_code,
@@ -327,7 +396,8 @@ async def _handle_stream(
         finally:
             await upstream.aclose()
             _log(req_id, start, upstream.status_code, hits, "messages",
-                 input_tokens=state["input_tokens"], output_tokens=state["output_tokens"])
+                 input_tokens=state["input_tokens"], output_tokens=state["output_tokens"],
+                 upstream=upstream_name)
 
     return StreamingResponse(
         generate(),
@@ -337,7 +407,7 @@ async def _handle_stream(
 
 
 def _log(req_id: str, start: float, status: int, hits: int, path: str,
-         input_tokens: int = 0, output_tokens: int = 0):
+         input_tokens: int = 0, output_tokens: int = 0, upstream: str = ""):
     latency = int((time.monotonic() - start) * 1000)
     entry = {
         "id": req_id,
@@ -349,11 +419,13 @@ def _log(req_id: str, start: float, status: int, hits: int, path: str,
         "hits": hits,
         "status": status,
         "mode": _current_mode,
+        "upstream": upstream,
     }
     storage.add_log(entry)
 
 
-def _record_snapshot(req_id: str, path: str, body: bytes, hits: int, status: str, leaks: list):
+def _record_snapshot(req_id: str, path: str, body: bytes, hits: int, status: str,
+                     leaks: list, upstream: str = ""):
     """记录一份出站审计快照（脱敏后内容；blocked 时为被拦截内容）。"""
     try:
         text = body.decode("utf-8", errors="replace")
@@ -365,9 +437,10 @@ def _record_snapshot(req_id: str, path: str, body: bytes, hits: int, status: str
         "path": path,
         "size": len(body),
         "hits": hits,
-        "status": status,          # "forwarded" | "blocked"
+        "status": status,          # forwarded | blocked | remasked | warned
         "leaks": leaks,            # 自检命中（fail-closed 时非空）
         "body": text,             # 实际出站的脱敏后请求体
+        "upstream": upstream,     # 这条请求实际路由到的上游名
     })
 
 
@@ -409,6 +482,7 @@ async def get_status():
         "selfcheck": _current_selfcheck,
         "name_detection": _name_detection,
         "name_detection_available": desensitizer._HAS_JIEBA,
+        "default_upstream": await routing.get_default_upstream(),
     }
 
 
@@ -489,3 +563,95 @@ async def test_rule(body: RuleTest):
     rules = await storage.get_enabled_rules()
     result = desensitizer.test_rules(body.text, rules)
     return result
+
+
+# ── 多上游路由 API ────────────────────────────────────────────────────────────
+
+def _parse_id(ident: str) -> int:
+    try:
+        return int(ident)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid id")
+
+
+@app.get("/dashboard/api/routing")
+async def get_routing():
+    ups = await routing.effective_upstreams()
+    upstreams = []
+    for u in ups.values():
+        token_env = u.get("token_env", "")
+        upstreams.append({
+            "id": u.get("id"),
+            "name": u["name"],
+            "base_url": u["base_url"],
+            "auth_scheme": u["auth_scheme"],
+            "token_env": token_env,
+            "supports_count_tokens": u["supports_count_tokens"],
+            "enabled": u["enabled"],
+            "builtin": u["builtin"],
+            # 只暴露「key 是否就绪」，绝不返回 key 本身
+            "key_present": bool(token_env and os.getenv(token_env)),
+        })
+    return {
+        "upstreams": upstreams,
+        "routes": await routing.effective_routes(),
+        "default_upstream": await routing.get_default_upstream(),
+    }
+
+
+@app.post("/dashboard/api/upstreams", status_code=201)
+async def create_upstream(body: UpstreamCreate):
+    return await storage.create_upstream(
+        body.name, body.base_url, body.auth_scheme, body.token_env,
+        int(body.supports_count_tokens))
+
+
+@app.put("/dashboard/api/upstreams/{ident}")
+async def update_upstream(ident: str, body: dict):
+    if ident.startswith("builtin:"):
+        await routing.set_builtin_enabled("upstream", ident[len("builtin:"):], bool(body.get("enabled", True)))
+        return {"ok": True}
+    result = await storage.update_upstream(_parse_id(ident), **body)
+    if result is None:
+        raise HTTPException(status_code=404)
+    return result
+
+
+@app.delete("/dashboard/api/upstreams/{ident}", status_code=204)
+async def delete_upstream(ident: str):
+    if ident.startswith("builtin:"):
+        raise HTTPException(status_code=400, detail="内置上游不可删除，可禁用")
+    await storage.delete_upstream(_parse_id(ident))
+
+
+@app.post("/dashboard/api/routes", status_code=201)
+async def create_route(body: RouteCreate):
+    return await storage.create_route(
+        body.name, body.match, body.upstream, body.model_rewrite, body.priority)
+
+
+@app.put("/dashboard/api/routes/{ident}")
+async def update_route(ident: str, body: dict):
+    if ident.startswith("builtin:"):
+        await routing.set_builtin_enabled("route", ident[len("builtin:"):], bool(body.get("enabled", True)))
+        return {"ok": True}
+    result = await storage.update_route(_parse_id(ident), **body)
+    if result is None:
+        raise HTTPException(status_code=404)
+    return result
+
+
+@app.delete("/dashboard/api/routes/{ident}", status_code=204)
+async def delete_route(ident: str):
+    if ident.startswith("builtin:"):
+        raise HTTPException(status_code=400, detail="内置路由不可删除，可禁用")
+    await storage.delete_route(_parse_id(ident))
+
+
+@app.post("/dashboard/api/default-upstream")
+async def set_default_upstream(body: dict):
+    name = str(body.get("name", "") or "")
+    if not name:
+        raise HTTPException(status_code=400, detail="name 必填")
+    await routing.set_default_upstream(name)
+    return {"default_upstream": name}

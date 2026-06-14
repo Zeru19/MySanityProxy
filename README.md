@@ -104,20 +104,58 @@ python -m pytest tests/ -v
 - **出站审计**——保存实际发往上游内容（脱敏后）的快照，保留条数可选最近 20 / 100 / 200 / 500 / 全部；
 - **出站自检策略**——补脱后放行（默认）/ 拦截（fail-closed）/ 仅告警，随时可切；
 - **智能姓名识别**——开关（默认开）：用 jieba 分词在角色词规则之外补召回「没有角色词引导」的裸姓名，token 级、不切碎「高强度」这类词；概率性增强，可一键关回纯规则；
+- **上游路由**——按请求 `model` 路由到不同上游（Anthropic / DeepSeek / GLM…），可视化增删上游与路由、禁用内置项、设默认上游，并显示各上游 key 是否就绪（只显示 ✓/✗，不显示 key 本身）；详见〔多上游 / 第三方模型〕；
 - **规则管理**——启停规则、添加自定义模式、导入导出 JSON；
 - **规则测试**——贴一段文本，立刻预览脱敏效果；
-- **模式切换**——脱敏与透明模式一键互换。
+- **模式切换**——脱敏与透明模式一键互换；
+- **明暗主题**——右上角一键切换，记忆选择。
 
 ## 配置
 
 编辑 `proxy/config.py`：
 
 ```python
-UPSTREAM_URL = "https://api.anthropic.com"  # 也可指向其他兼容端点
+UPSTREAM_URL = "https://api.anthropic.com"  # anthropic 默认 base，也是单上游回退
 LISTEN_HOST  = "127.0.0.1"
 LISTEN_PORT  = 8080
 MODE         = "desensitize"                # 或 "transparent"
+
+# 多上游：内置 anthropic / deepseek / glm 及对应路由（详见〔多上游 / 第三方模型〕）
+UPSTREAMS = [...]   # 每个上游：name / base_url / auth_scheme / token_env / supports_count_tokens
+ROUTES    = [...]   # 有序，按 model 通配匹配 → 目标上游（+ 可选 model_rewrite）
 ```
+
+上游/路由也可在面板「上游路由」里实时增改、覆盖或禁用，存入 `sanity.db`；**API key 始终来自环境变量，不入库**。
+
+## 多上游 / 第三方模型（DeepSeek / GLM 等）
+
+Claude Code 只认一个 `ANTHROPIC_BASE_URL`，所有请求都进 SanityProxy；代理再按请求体里的 `model` 字段把它**路由**到不同上游。DeepSeek、GLM 都提供 **Anthropic 兼容端点**，所以脱敏逻辑无需改动即可复用。
+
+**凭证只来自环境变量**，绝不写进 `sanity.db` / 日志 / 快照：
+
+```bash
+export DEEPSEEK_API_KEY=sk-...   # DeepSeek
+export GLM_API_KEY=...           # 智谱 GLM（Z.AI / BigModel）
+# Anthropic：用 Claude 订阅(OAuth)登录时无需设 key——代理会透传你原有的鉴权头
+```
+
+内置上游与默认路由（`proxy/config.py`，亦可面板增改/禁用）：
+
+| 上游 | base_url | 鉴权 | 默认路由 |
+|------|----------|------|----------|
+| anthropic | `https://api.anthropic.com` | x-api-key / 透传 | `claude*` |
+| deepseek | `https://api.deepseek.com/anthropic` | `x-api-key`（`DEEPSEEK_API_KEY`） | `deepseek*` |
+| glm | `https://api.z.ai/api/anthropic`（国内 `open.bigmodel.cn/api/anthropic`） | `Bearer`（`GLM_API_KEY`） | `glm*` |
+
+用某个第三方模型，只需在 Claude Code 端把模型名设成它，代理据此路由：
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_MODEL=deepseek-v4-flash claude
+```
+
+每条路由支持 `model_rewrite`（转发前把 `model` 改成上游真实模型名）。实时日志与出站审计都新增「上游」列，标明每条请求去了哪个上游。
+
+**边角提示**：DeepSeek/GLM 的 `count_tokens` 未文档化，代理对不支持该端点的上游做**本地粗略估算**兜底（避免 404）；`thinking`/`signature` 仍逐字节透传不改，但 Anthropic 的加密签名语义在第三方上并不成立。OpenAI 格式（非 Anthropic）的上游需要协议转换，暂不在本工具范围内（可在前面再串 claude-code-router / LiteLLM 等翻译层）。
 
 ## 项目结构
 
@@ -126,12 +164,13 @@ proxy/
 ├── main.py           # 启动入口
 ├── server.py         # FastAPI 路由 + 代理核心
 ├── desensitizer.py   # 脱敏 / 还原引擎（核心逻辑）
+├── routing.py        # 多上游 model 路由（按 model 选上游、注入鉴权）
 ├── rules.py          # 内置规则定义
-├── storage.py        # SQLite 规则存储 + 内存日志
+├── storage.py        # SQLite 规则/上游/路由存储 + 内存日志（不存任何密钥）
 ├── models.py         # Pydantic 数据模型
-├── config.py         # 配置
+├── config.py         # 配置（含内置上游 UPSTREAMS / 路由 ROUTES）
 ├── static/           # Web 面板（HTML / JS / CSS，免构建）
-└── tests/            # 自动化测试（出站、入站、fail-closed、思考/流式）
+└── tests/            # 自动化测试（出站、入站、fail-closed、思考/流式、多上游路由）
 ```
 
 ## 资料文件怎么放
@@ -151,7 +190,8 @@ sanity_claude/
 ## 安全说明
 
 - 代理默认只监听 `127.0.0.1`，不对外网暴露；
-- `sanity.db` 只存规则和设置（不含任何原文），仅在本地，也不纳入版本管理；
+- `sanity.db` 只存规则、上游/路由和设置（**不含任何原文，也不含任何 API key**），仅在本地，也不纳入版本管理；
+- 各上游的 API key **只来自环境变量**（路由表仅记录变量名），运行时读、仅在内存停留，绝不落库/落日志/落快照——面板只显示「key 是否就绪」而非 key 本身；
 - 值↔标签的映射**按请求隔离**：每个请求现建、请求一结束就销毁——原始 PII 既不会在进程里长期驻留，也不会落盘；
 - 描述「原始字节」的那几个响应头（`content-encoding`/`content-length`/`transfer-encoding`）会被剥掉，因为响应体已经被代理解压并改写过了；
 - 你的原始资料都放在被 gitignore 的目录里（见〔资料文件怎么放〕），永远不会被提交。

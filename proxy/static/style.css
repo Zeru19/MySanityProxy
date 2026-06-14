@@ -189,6 +189,34 @@ select:focus { outline: none; border-color: var(--accent); }
 :root[data-theme="light"] .theme-btn .ico-moon { display: none; }
 .theme-btn:hover svg { transform: rotate(35deg); }
 
+/* ── Settings dropdown (gear) ───────────────────────────────────────────────── */
+.settings-wrap { position: relative; display: inline-flex; }
+#btn-settings[aria-expanded="true"] { color: var(--text); border-color: var(--text-faint); background: var(--btn-outline-hover); }
+.settings-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 60;
+  min-width: 248px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: 0 16px 40px -16px rgba(0,0,0,.6);
+  display: flex; flex-direction: column; gap: 2px;
+  animation: rise .14s ease;
+}
+.settings-menu[hidden] { display: none; }
+.settings-section { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); padding: 8px 10px 4px; }
+.settings-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; }
+.settings-row { justify-content: space-between; cursor: pointer; }
+.settings-row:hover, .settings-action:hover { background: var(--surface-3); }
+.settings-label { display: flex; flex-direction: column; line-height: 1.25; }
+.settings-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.settings-desc { font-size: 11px; color: var(--text-faint); }
+.settings-action { width: 100%; background: none; border: none; cursor: pointer; color: var(--text); font: inherit; font-size: 13px; font-weight: 500; text-align: left; }
+.settings-action svg { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+.settings-row .select-wrap { flex-shrink: 0; }
+.settings-row select {
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+  background: var(--surface-3); border: 1px solid var(--border);
+  border-radius: 999px; padding: 4px 26px 4px 12px; font-size: 12px; color: var(--text);
+}
+
 /* ── Layout ─────────────────────────────────────────────────────────────── */
 main { padding: 24px 28px 48px; display: flex; flex-direction: column; gap: 18px; max-width: 1380px; margin: 0 auto; }
 

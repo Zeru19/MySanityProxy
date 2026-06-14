@@ -30,6 +30,24 @@ document.getElementById("btn-theme-toggle").addEventListener("click", () => {
   applyTheme(next);
 });
 
+// ── Settings dropdown (gear) ─────────────────────────────────────────────────
+const _settingsMenu = document.getElementById("settings-menu");
+const _settingsWrap = document.getElementById("settings-wrap");
+const _settingsBtn = document.getElementById("btn-settings");
+function toggleSettings(open) {
+  const show = open === undefined ? _settingsMenu.hidden : open;
+  _settingsMenu.hidden = !show;
+  _settingsBtn.setAttribute("aria-expanded", show ? "true" : "false");
+}
+_settingsBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleSettings(); });
+document.addEventListener("click", (e) => {
+  if (!_settingsMenu.hidden && !_settingsWrap.contains(e.target)) toggleSettings(false);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleSettings(false); });
+// 点「上游路由 / 规则管理」后收起菜单（它们各自的打开弹窗逻辑不变）
+document.querySelectorAll(".settings-action").forEach(
+  (b) => b.addEventListener("click", () => toggleSettings(false)));
+
 // ── Stat counters ────────────────────────────────────────────────────────────
 function updateStats(entry) {
   totalReqs++;
@@ -104,7 +122,7 @@ function applyNameDetection(data) {
     toggle.disabled = true;
     if (ctrl) {
       ctrl.style.opacity = "0.5";
-      ctrl.title = "未安装 jieba，姓名识别不可用（pip install jieba 后重启代理）";
+      ctrl.title = "未安装 jieba，智能识别不可用（pip install jieba 后重启代理）";
     }
   }
 }
@@ -159,6 +177,8 @@ fetchStatus();
 
 // ── Outbound audit snapshots ─────────────────────────────────────────────────
 let snapItems = [];
+// 显示条数（前端展示用，独立于后端「保留条数」）：仅控制面板渲染多少条，持久化在浏览器
+let snapDisplay = localStorage.getItem("sanity-snap-display") || "20";
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -176,7 +196,10 @@ async function loadSnapshots() {
 function renderSnapshots() {
   const tbody = document.getElementById("snap-body");
   tbody.innerHTML = "";
-  snapItems.forEach((s, idx) => {
+  // 只渲染最新的「显示条数」条；idx 仍是 snapItems 的下标（slice 从 0 开始，下标不变），
+  // 「查看」点击据此回查完整 snapItems[idx]。
+  const limit = snapDisplay === "all" ? snapItems.length : (parseInt(snapDisplay, 10) || 20);
+  snapItems.slice(0, limit).forEach((s, idx) => {
     const tr = document.createElement("tr");
     const n = s.leaks ? s.leaks.length : 0;
     let checkBadge;
@@ -234,6 +257,17 @@ document.getElementById("snap-capacity").addEventListener("change", async (e) =>
     body: JSON.stringify({ capacity: e.target.value }),
   });
   await loadSnapshots();
+});
+
+// 显示条数：纯前端，只改展示数量、不请求后端
+(function initSnapDisplay() {
+  const sel = document.getElementById("snap-display");
+  if (sel) sel.value = snapDisplay;
+})();
+document.getElementById("snap-display").addEventListener("change", (e) => {
+  snapDisplay = e.target.value;
+  localStorage.setItem("sanity-snap-display", snapDisplay);
+  renderSnapshots();
 });
 
 loadSnapshots();

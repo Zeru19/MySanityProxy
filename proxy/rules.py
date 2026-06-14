@@ -39,7 +39,7 @@ BUILTIN_RULES: list[BuiltinRule] = [
     BuiltinRule(
         name="电子邮箱",
         category="联系方式",
-        pattern=r"[\w.\-]+@[\w.\-]+\.\w+",
+        pattern=r"[\w.+\-]+@[\w.\-]+\.\w+",
     ),
     BuiltinRule(
         name="银行卡号",

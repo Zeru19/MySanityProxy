@@ -162,3 +162,73 @@ async def test_system_prompt_also_desensitized():
     assert "[[SANITY_" in upstream_system, "system prompt 未被脱敏"
 
     print("[PASS] system prompt 中的 PII 已正确脱敏")
+
+
+@pytest.mark.asyncio
+async def test_email_with_plus_tag_fully_masked():
+    """
+    回归测试（Issue #7）：含 "+tag" 本地部分的邮箱必须被完整脱敏。
+    旧正则 [\\w.\\-]+@... 不含 '+'，会漏掉 "user+" 前缀导致 PII 泄露。
+    """
+    from server import app
+    import server
+
+    captured: dict = {}
+
+    plus_email = "user" + "+" + "tag@example.com"
+    payload = {
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": f"请联系 {plus_email} 获取资料。"}],
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.content = json.dumps({
+        "id": "msg_test003",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "OK"}],
+        "usage": {"input_tokens": 30, "output_tokens": 5},
+    }).encode()
+
+    async def fake_request(method, url, headers=None, content=None, **kwargs):
+        captured["body"] = json.loads(content)
+        return mock_resp
+
+    with patch.object(server, "_http_client") as mock_client:
+        mock_client.request = AsyncMock(side_effect=fake_request)
+        server._current_mode = "desensitize"
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/messages",
+                json=payload,
+                headers={
+                    "x-api-key": "sk-test-fake",
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+            )
+
+    assert resp.status_code == 200
+    upstream_text = captured["body"]["messages"][0]["content"]
+    print(f"\n[上游收到] {upstream_text}")
+
+    # 断言 1：原始邮箱（含 "user+" 前缀）完全不出现在上游请求中
+    assert plus_email not in upstream_text, (
+        f"邮箱泄露！上游请求中发现原始值: '{plus_email}'\n上游内容: {upstream_text}"
+    )
+    assert "user+" not in upstream_text, (
+        f"邮箱本地部分前缀 'user+' 泄露至上游\n上游内容: {upstream_text}"
+    )
+
+    # 断言 2：存在 CONTACT 类标签，证明邮箱已被识别并标签化
+    assert "[[SANITY_CONTACT_" in upstream_text, (
+        f"邮箱未被脱敏，未找到 [[SANITY_CONTACT_]] 标签\n上游内容: {upstream_text}"
+    )
+
+    print("[PASS] 含 '+tag' 的邮箱已完整脱敏")

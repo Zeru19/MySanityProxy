@@ -48,6 +48,30 @@ async def _init_schema():
             value TEXT NOT NULL
         )
     """)
+    # 多上游路由：仅存「自定义」上游/路由（面板新增或对内置的覆盖）。
+    # 注意：绝不存 API key 本身——只存 token_env（环境变量名），key 运行时从 env 读。
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS upstreams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            auth_scheme TEXT NOT NULL DEFAULT 'x-api-key',
+            token_env TEXT NOT NULL DEFAULT '',
+            supports_count_tokens INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 1
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS routes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            match TEXT NOT NULL,
+            upstream TEXT NOT NULL,
+            model_rewrite TEXT,
+            priority INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 1
+        )
+    """)
     count = await db.execute_fetchall("SELECT COUNT(*) as c FROM rules WHERE builtin=1")
     if count[0]["c"] == 0:
         await db.executemany(
@@ -135,6 +159,99 @@ async def set_setting(key: str, value: str):
         (key, value),
     )
     await db.commit()
+
+
+# ── 多上游路由（自定义上游 / 路由）─────────────────────────────────────────────
+# 仅存自定义条目；内置默认来自 config.UPSTREAMS / config.ROUTES。token 一律不入库。
+
+async def get_custom_upstreams() -> list[dict]:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id, name, base_url, auth_scheme, token_env, supports_count_tokens, enabled "
+        "FROM upstreams ORDER BY id"
+    )
+    return [dict(r) for r in rows]
+
+
+async def create_upstream(name: str, base_url: str, auth_scheme: str,
+                          token_env: str, supports_count_tokens: int = 0) -> dict:
+    db = await get_db()
+    cur = await db.execute(
+        "INSERT INTO upstreams (name, base_url, auth_scheme, token_env, supports_count_tokens, enabled) "
+        "VALUES (?,?,?,?,?,1)",
+        (name, base_url, auth_scheme, token_env, int(bool(supports_count_tokens))),
+    )
+    await db.commit()
+    rows = await db.execute_fetchall("SELECT * FROM upstreams WHERE id=?", (cur.lastrowid,))
+    return dict(rows[0])
+
+
+async def update_upstream(upstream_id: int, **kwargs) -> Optional[dict]:
+    db = await get_db()
+    allowed = {"name", "base_url", "auth_scheme", "token_env", "supports_count_tokens", "enabled"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return None
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    await db.execute(
+        f"UPDATE upstreams SET {set_clause} WHERE id=?",
+        (*fields.values(), upstream_id),
+    )
+    await db.commit()
+    rows = await db.execute_fetchall("SELECT * FROM upstreams WHERE id=?", (upstream_id,))
+    return dict(rows[0]) if rows else None
+
+
+async def delete_upstream(upstream_id: int) -> bool:
+    db = await get_db()
+    await db.execute("DELETE FROM upstreams WHERE id=?", (upstream_id,))
+    await db.commit()
+    return True
+
+
+async def get_custom_routes() -> list[dict]:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id, name, match, upstream, model_rewrite, priority, enabled "
+        "FROM routes ORDER BY priority, id"
+    )
+    return [dict(r) for r in rows]
+
+
+async def create_route(name: str, match: str, upstream: str,
+                       model_rewrite: Optional[str] = None, priority: int = 0) -> dict:
+    db = await get_db()
+    cur = await db.execute(
+        "INSERT INTO routes (name, match, upstream, model_rewrite, priority, enabled) "
+        "VALUES (?,?,?,?,?,1)",
+        (name, match, upstream, model_rewrite or None, priority),
+    )
+    await db.commit()
+    rows = await db.execute_fetchall("SELECT * FROM routes WHERE id=?", (cur.lastrowid,))
+    return dict(rows[0])
+
+
+async def update_route(route_id: int, **kwargs) -> Optional[dict]:
+    db = await get_db()
+    allowed = {"name", "match", "upstream", "model_rewrite", "priority", "enabled"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return None
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    await db.execute(
+        f"UPDATE routes SET {set_clause} WHERE id=?",
+        (*fields.values(), route_id),
+    )
+    await db.commit()
+    rows = await db.execute_fetchall("SELECT * FROM routes WHERE id=?", (route_id,))
+    return dict(rows[0]) if rows else None
+
+
+async def delete_route(route_id: int) -> bool:
+    db = await get_db()
+    await db.execute("DELETE FROM routes WHERE id=?", (route_id,))
+    await db.commit()
+    return True
 
 
 def add_log(entry: dict):

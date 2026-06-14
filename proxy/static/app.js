@@ -51,6 +51,7 @@ function appendLog(entry) {
   tr.innerHTML = `
     <td>${entry.timestamp}</td>
     <td class="mono"><span class="truncate">${entry.path || "messages"}</span></td>
+    <td>${entry.upstream ? `<span class="badge">${escapeHtml(entry.upstream)}</span>` : "-"}</td>
     <td>${entry.latency_ms}</td>
     <td>${entry.input_tokens || 0}</td>
     <td>${entry.output_tokens || 0}</td>
@@ -186,6 +187,7 @@ function renderSnapshots() {
     tr.innerHTML = `
       <td class="mono">${s.timestamp}</td>
       <td class="mono"><span class="truncate">${escapeHtml(s.path)}</span></td>
+      <td>${s.upstream ? `<span class="badge">${escapeHtml(s.upstream)}</span>` : "-"}</td>
       <td>${s.size}</td>
       <td>${s.hits}</td>
       <td>${checkBadge}</td>
@@ -364,4 +366,165 @@ document.getElementById("import-file").addEventListener("change", async (e) => {
     alert("导入失败：JSON 格式错误");
   }
   e.target.value = "";
+});
+
+// ── Upstream routing ───────────────────────────────────────────────────────────
+let routingData = { upstreams: [], routes: [], default_upstream: "" };
+
+async function loadRouting() {
+  const res = await fetch(`${API}/routing`);
+  routingData = await res.json();
+  renderUpstreams();
+  renderRoutes();
+  renderDefaultUpstream();
+}
+
+function renderUpstreams() {
+  const tbody = document.getElementById("upstreams-body");
+  tbody.innerHTML = "";
+  for (const u of routingData.upstreams) {
+    const ident = u.builtin ? `builtin:${u.name}` : u.id;
+    const src = u.builtin ? '<span class="badge badge-blue">内置</span>' : '<span class="badge">自定义</span>';
+    let key;
+    if (!u.token_env) key = '<span class="key-no">无(透传)</span>';
+    else if (u.key_present) key = '<span class="key-ok">✓ 就绪</span>';
+    else key = '<span class="key-no">✗ 未设</span>';
+    const del = u.builtin ? "" : `<button class="btn btn-sm btn-danger" data-ident="${u.id}" data-action="delete">删除</button>`;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><label class="toggle"><input type="checkbox" ${u.enabled ? "checked" : ""} data-ident="${ident}" data-action="toggle"/><span class="toggle-slider"></span></label></td>
+      <td>${escapeHtml(u.name)}</td>
+      <td class="mono"><span class="truncate" title="${escapeHtml(u.base_url)}">${escapeHtml(u.base_url)}</span></td>
+      <td>${escapeHtml(u.auth_scheme)}</td>
+      <td class="mono">${u.token_env ? escapeHtml(u.token_env) : "-"}</td>
+      <td>${key}</td>
+      <td>${u.supports_count_tokens ? "✓" : "—"}</td>
+      <td>${src}</td>
+      <td>${del}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderRoutes() {
+  const tbody = document.getElementById("routes-body");
+  tbody.innerHTML = "";
+  for (const r of routingData.routes) {
+    const ident = r.builtin ? `builtin:${r.name}` : r.id;
+    const src = r.builtin ? '<span class="badge badge-blue">内置</span>' : '<span class="badge">自定义</span>';
+    const del = r.builtin ? "" : `<button class="btn btn-sm btn-danger" data-ident="${r.id}" data-action="delete">删除</button>`;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><label class="toggle"><input type="checkbox" ${r.enabled ? "checked" : ""} data-ident="${ident}" data-action="toggle"/><span class="toggle-slider"></span></label></td>
+      <td>${escapeHtml(r.name)}</td>
+      <td class="mono">${escapeHtml(r.match)}</td>
+      <td>${escapeHtml(r.upstream)}</td>
+      <td class="mono">${r.model_rewrite ? escapeHtml(r.model_rewrite) : "-"}</td>
+      <td>${r.priority}</td>
+      <td>${src}</td>
+      <td>${del}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderDefaultUpstream() {
+  const sel = document.getElementById("default-upstream");
+  sel.innerHTML = "";
+  for (const u of routingData.upstreams) {
+    const opt = document.createElement("option");
+    opt.value = u.name;
+    opt.textContent = u.name;
+    sel.appendChild(opt);
+  }
+  sel.value = routingData.default_upstream;
+}
+
+// Upstream toggle / delete (event delegation)
+document.getElementById("upstreams-body").addEventListener("change", async (e) => {
+  if (e.target.dataset.action !== "toggle") return;
+  await fetch(`${API}/upstreams/${encodeURIComponent(e.target.dataset.ident)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: e.target.checked ? 1 : 0 }),
+  });
+  await loadRouting();
+});
+document.getElementById("upstreams-body").addEventListener("click", async (e) => {
+  if (e.target.dataset.action !== "delete") return;
+  await fetch(`${API}/upstreams/${encodeURIComponent(e.target.dataset.ident)}`, { method: "DELETE" });
+  await loadRouting();
+});
+
+// Route toggle / delete
+document.getElementById("routes-body").addEventListener("change", async (e) => {
+  if (e.target.dataset.action !== "toggle") return;
+  await fetch(`${API}/routes/${encodeURIComponent(e.target.dataset.ident)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: e.target.checked ? 1 : 0 }),
+  });
+  await loadRouting();
+});
+document.getElementById("routes-body").addEventListener("click", async (e) => {
+  if (e.target.dataset.action !== "delete") return;
+  await fetch(`${API}/routes/${encodeURIComponent(e.target.dataset.ident)}`, { method: "DELETE" });
+  await loadRouting();
+});
+
+// Add upstream
+document.getElementById("btn-upstream-add").addEventListener("click", async () => {
+  const name = document.getElementById("uf-name").value.trim();
+  const base_url = document.getElementById("uf-base").value.trim();
+  const auth_scheme = document.getElementById("uf-scheme").value;
+  const token_env = document.getElementById("uf-tokenenv").value.trim();
+  const supports_count_tokens = document.getElementById("uf-count").checked;
+  if (!name || !base_url) return alert("请填写名称和 base_url");
+  await fetch(`${API}/upstreams`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, base_url, auth_scheme, token_env, supports_count_tokens }),
+  });
+  ["uf-name", "uf-base", "uf-tokenenv"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("uf-count").checked = false;
+  await loadRouting();
+});
+
+// Add route
+document.getElementById("btn-route-add").addEventListener("click", async () => {
+  const name = document.getElementById("rtf-name").value.trim();
+  const match = document.getElementById("rtf-match").value.trim();
+  const upstream = document.getElementById("rtf-upstream").value.trim();
+  const model_rewrite = document.getElementById("rtf-rewrite").value.trim() || null;
+  const priority = parseInt(document.getElementById("rtf-priority").value) || 0;
+  if (!name || !match || !upstream) return alert("请填写名称、匹配和目标上游");
+  await fetch(`${API}/routes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, match, upstream, model_rewrite, priority }),
+  });
+  ["rtf-name", "rtf-match", "rtf-upstream", "rtf-rewrite"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("rtf-priority").value = "0";
+  await loadRouting();
+});
+
+// Default upstream
+document.getElementById("default-upstream").addEventListener("change", async (e) => {
+  await fetch(`${API}/default-upstream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: e.target.value }),
+  });
+});
+
+// Open/close routing modal
+document.getElementById("btn-routing").addEventListener("click", () => {
+  document.getElementById("routing-modal-backdrop").style.display = "flex";
+  loadRouting();
+});
+document.getElementById("btn-routing-close").addEventListener("click", () => {
+  document.getElementById("routing-modal-backdrop").style.display = "none";
+});
+document.getElementById("routing-modal-backdrop").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.style.display = "none";
 });

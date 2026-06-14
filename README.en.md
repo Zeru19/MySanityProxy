@@ -104,20 +104,60 @@ The web dashboard at `http://localhost:8080/dashboard` provides:
 - Outbound audit — snapshots of what was actually sent upstream (after masking); retain the last 20 / 100 / 200 / 500 / all
 - Self-check policy switch — remask (default) / block (fail-closed) / off
 - Smart name detection — toggle (on by default): a jieba word-segmentation pass that recalls bare names with no role-word cue (beyond the regex rules), at token granularity so words like 高强度 aren't broken; a probabilistic add-on, one click to turn off
+- Upstream routing — route by the request `model` to different upstreams (Anthropic / DeepSeek / GLM…); add/disable upstreams and routes, pick the default upstream, and see whether each upstream's key is ready (shows ✓/✗ only, never the key); see *Multiple upstreams / third-party models*
 - Rule manager — enable/disable rules, add custom patterns, import/export JSON
 - Rule tester — paste text and preview desensitization output instantly
 - Mode toggle — switch between desensitize and transparent mode
+- Light/dark theme — one-click toggle in the header, remembers your choice
 
 ## Configuration
 
 Edit `proxy/config.py`:
 
 ```python
-UPSTREAM_URL = "https://api.anthropic.com"  # or any compatible endpoint
+UPSTREAM_URL = "https://api.anthropic.com"  # anthropic default base / single-upstream fallback
 LISTEN_HOST  = "127.0.0.1"
 LISTEN_PORT  = 8080
 MODE         = "desensitize"                # or "transparent"
+
+# Multi-upstream: built-in anthropic / deepseek / glm + routes (see below)
+UPSTREAMS = [...]   # each: name / base_url / auth_scheme / token_env / supports_count_tokens
+ROUTES    = [...]   # ordered; glob-match the model → target upstream (+ optional model_rewrite)
 ```
+
+Upstreams/routes can also be edited live in the dashboard's *Upstream routing* panel (persisted to `sanity.db`); **API keys always come from environment variables and are never stored**.
+
+## Multiple upstreams / third-party models (DeepSeek / GLM, etc.)
+
+Claude Code honors a single `ANTHROPIC_BASE_URL`, so all requests go to SanityProxy, which then **routes** by the request body's `model` field to different upstreams. DeepSeek and GLM both expose **Anthropic-compatible endpoints**, so the desensitization logic is reused unchanged.
+
+**Credentials come only from environment variables** — never written to `sanity.db` / logs / snapshots:
+
+```bash
+export DEEPSEEK_API_KEY=sk-...   # DeepSeek
+export GLM_API_KEY=...           # Zhipu GLM (Z.AI / BigModel)
+# Anthropic: no key needed when logged in via a Claude subscription (OAuth) — the proxy passes your existing auth through
+```
+
+Built-in upstreams and default routes (`proxy/config.py`, also editable in the dashboard):
+
+| Upstream | base_url | Auth | Default route |
+|----------|----------|------|---------------|
+| anthropic | `https://api.anthropic.com` | x-api-key / pass-through | `claude*` |
+| deepseek | `https://api.deepseek.com/anthropic` | `x-api-key` (`DEEPSEEK_API_KEY`) | `deepseek*` |
+| glm | `https://api.z.ai/api/anthropic` (CN: `open.bigmodel.cn/api/anthropic`) | `Bearer` (`GLM_API_KEY`) | `glm*` |
+
+To use a third-party model, just set the model name on the Claude Code side — the proxy routes on it:
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_MODEL=deepseek-v4-flash claude
+```
+
+> **Let Claude Code configure it for you**: inside this project, just say "set up / connect DeepSeek / connect GLM" — the agent first **scans your environment variables** (presence only, never echoing the key) to decide native vs third-party and sets up sensible defaults. See `AGENTS.md` → "首次配置：扫描环境、自动选择上游".
+
+Each route supports `model_rewrite` (rewrite `model` to the upstream's real name before forwarding). The live log and outbound audit gain an "upstream" column showing where each request went.
+
+**Caveats**: DeepSeek/GLM don't document `count_tokens`, so the proxy returns a **local estimate** for upstreams that don't support it (avoids 404s); `thinking`/`signature` still round-trip byte-for-byte, but Anthropic's encrypted-signature semantics don't hold on third parties. OpenAI-format (non-Anthropic) upstreams need protocol translation and are out of scope here (chain a translator like claude-code-router / LiteLLM in front).
 
 ## Project structure
 
@@ -126,12 +166,13 @@ proxy/
 ├── main.py           # entry point
 ├── server.py         # FastAPI routes + proxy logic
 ├── desensitizer.py   # core desensitize / restore engine
+├── routing.py        # multi-upstream model routing (pick upstream, inject auth)
 ├── rules.py          # built-in rule definitions
-├── storage.py        # SQLite rule persistence + in-memory log buffer
+├── storage.py        # SQLite rules/upstreams/routes + in-memory log buffer (no secrets)
 ├── models.py         # Pydantic models
-├── config.py         # configuration
+├── config.py         # configuration (incl. built-in UPSTREAMS / ROUTES)
 ├── static/           # web dashboard (HTML / JS / CSS, no build step)
-└── tests/            # automated tests (outbound, inbound, fail-closed, thinking/streaming)
+└── tests/            # automated tests (outbound, inbound, fail-closed, thinking/streaming, routing)
 ```
 
 ## Managing your documents
@@ -151,7 +192,8 @@ Reading a local file doesn't send it anywhere; content only leaves the machine w
 ## Security notes
 
 - The proxy binds to `127.0.0.1` by default — not exposed to the network
-- `sanity.db` stores only rules and settings (no original text); local-only and excluded from version control
+- `sanity.db` stores only rules, upstreams/routes and settings (**no original text and no API keys**); local-only and excluded from version control
+- Each upstream's API key comes **only from environment variables** (the routing table records just the variable name); read at request time, kept in memory only, never written to the DB / logs / snapshots — the dashboard shows "key ready" status, not the key itself
 - The tag↔value mapping is **per-request**: created fresh for each request and discarded when it finishes — raw PII is never retained process-wide or written to disk
 - Response headers that describe the original bytes (`content-encoding` / `content-length` / `transfer-encoding`) are stripped, since the proxy decompresses and rewrites the body
 - Your source documents live in gitignored directories (see *Managing your documents*) and are never committed

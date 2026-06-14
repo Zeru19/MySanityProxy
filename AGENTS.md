@@ -22,6 +22,64 @@ Claude Code ──► SanityProxy (localhost:8080) ──► api.anthropic.com
 
 4. **代理关闭后的状态**：代理停止时，`ANTHROPIC_BASE_URL` 如果仍指向 `localhost:8080`，Claude Code 将无法连接。提醒用户停止代理后还原该变量，或始终通过代理使用。
 
+5. **上游选择（原生 Anthropic / 第三方）**：**先执行下面〔首次配置：扫描环境、自动选择上游〕**——扫描环境变量判定该走原生 Anthropic 还是 DeepSeek / GLM 等第三方，给出默认配置并与用户确认。
+
+---
+
+## 首次配置：扫描环境、自动选择上游（原生 Anthropic / 第三方）
+
+当用户要求「配置 / 接入 DeepSeek / 接入 GLM / 帮我跑起来」时，Agent **第一步先扫描当前环境变量**，据此判定走原生还是第三方上游，给出建议并**默认配置好**——全程只读环境变量的「是否设置」，**绝不打印 key 的值**。
+
+### 第一步：扫描环境（不回显密钥值）
+
+```bash
+# 密钥类：只报「是否设置」，不回显值
+for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN DEEPSEEK_API_KEY GLM_API_KEY; do
+  eval "val=\${$v}"; [ -n "$val" ] && echo "$v = ✅ 已设置" || echo "$v = ⬜ 未设置"
+done
+# 非密钥：可直接显示当前值
+for v in ANTHROPIC_BASE_URL ANTHROPIC_MODEL DEEPSEEK_BASE_URL GLM_BASE_URL DEFAULT_UPSTREAM; do
+  eval "val=\${$v}"; echo "$v = ${val:-(未设置)}"
+done
+```
+
+> 这些 key 是给**运行 `python main.py` 的那个进程**用的（代理用 `os.getenv` 读上游的 `token_env`）。务必确认 key 在**启动代理的 shell** 里可见——写进 `~/.zshrc` / `~/.bashrc` 后 `source`，或在启动命令前 `export`。代理**不从 `sanity.db` 读 key、也绝不存 key**。
+
+### 第二步：按扫描结果判定上游
+
+| 扫描结果 | 判定 | 默认动作 |
+|----------|------|----------|
+| 仅 `ANTHROPIC_*`，或都没有（用 Claude 订阅 OAuth 登录） | **原生 Anthropic** | 默认上游 `anthropic`，无需改动；鉴权透传客户端原头 |
+| 设了 `DEEPSEEK_API_KEY` | **DeepSeek** | 把模型设为 `deepseek-*`（如 `deepseek-v4-flash`）→ 命中内置 `deepseek*` 路由 |
+| 设了 `GLM_API_KEY` | **GLM / 智谱** | 把模型设为 `glm-*`（如 `glm-4.6`）→ 命中内置 `glm*` 路由 |
+| 设了多个第三方 key | **多上游并存** | 路由按 model 前缀已能区分；**问用户默认走哪个**，据此设 `DEFAULT_UPSTREAM` |
+| 设了非内置第三方（如 Kimi/Moonshot） | **自定义上游** | 在面板「上游路由」或 `config.py` 加一条上游（`base_url` + `token_env` + 鉴权）和一条路由 |
+
+判定原则：**设了第三方 key 通常就是想用它 → 默认接第三方**；只有 Anthropic / 无 key → 原生。**拿不准就问用户，别擅自假设。**
+
+### 第三步：默认配置好并给出启动命令
+
+1. **代理侧**：默认沿用 `proxy/config.py` 内置的 anthropic / deepseek / glm 三个上游与路由；改默认上游用面板「上游路由」或 `POST /dashboard/api/default-upstream {"name":"deepseek"}`。
+2. **Claude Code 侧**：写项目级 `.claude/settings.local.json`（默认做法，见〔安装与启动·第三步〕）；**接第三方时同时设 `ANTHROPIC_MODEL`**，代理据此路由：
+
+   ```json
+   {
+     "env": {
+       "ANTHROPIC_BASE_URL": "http://localhost:8080",
+       "ANTHROPIC_MODEL": "deepseek-v4-flash"
+     }
+   }
+   ```
+   > **切勿把 API key 写进 `settings.local.json`**——key 只走环境变量；该文件会随项目，写进 key 等于落盘泄密。
+3. **核对 key 就绪**：起代理后打开面板「上游路由」，确认目标上游的 **Key 列为 ✓ 就绪**（✗ 表示对应 `token_env` 没在代理进程的环境里）。
+
+### 第四步：第三方上游的额外确认项
+
+- **count_tokens**：DeepSeek / GLM 未文档化该端点，代理对「不支持」的上游做**本地粗略估算**兜底（避免 404，但 token 数不精确）。
+- **扩展思考签名**：`thinking` / `signature` 仍逐字节透传，但 Anthropic 的加密签名语义在第三方上**不成立**，别指望第三方支持。
+- **能力差异**：DeepSeek 不支持图片/文档块、GLM-4.6 纯文本；超出能力的内容块由上游决定，代理不拦。
+- **协议**：仅支持 **Anthropic 兼容**端点；OpenAI Chat Completions 格式的服务需协议转换（前面串 claude-code-router / LiteLLM），不在本工具范围内。
+
 ---
 
 ## 环境要求
@@ -166,10 +224,11 @@ sanity_claude/
     ├── main.py         ← 启动入口：python main.py
     ├── server.py       ← FastAPI 路由 + 代理核心
     ├── desensitizer.py ← 脱敏/还原引擎（核心逻辑）
+    ├── routing.py      ← 多上游 model 路由（按 model 选上游、注入鉴权）
     ├── rules.py        ← 内置规则定义
-    ├── storage.py      ← SQLite 规则存储 + 内存日志
+    ├── storage.py      ← SQLite 规则/上游/路由存储 + 内存日志（不存任何密钥）
     ├── models.py       ← Pydantic 数据模型
-    ├── config.py       ← 配置（端口、上游 URL、模式）
+    ├── config.py       ← 配置（端口、模式、内置上游 UPSTREAMS / 路由 ROUTES）
     ├── requirements.txt
     ├── static/
     │   ├── index.html  ← Web 面板
@@ -180,7 +239,8 @@ sanity_claude/
         ├── test_desensitize_outbound.py  ← 验证出站脱敏
         ├── test_restore_inbound.py       ← 验证入站还原
         ├── test_failclosed.py            ← 出站自检 / fail-closed / 案号加固
-        └── test_thinking_signature.py    ← thinking 签名不变 + 流式还原
+        ├── test_thinking_signature.py    ← thinking 签名不变 + 流式还原
+        └── test_routing.py               ← 多上游路由 / 鉴权注入 / 兜底 / 向后兼容
 ```
 
 ---
@@ -224,13 +284,28 @@ LISTEN_PORT = 9090   # 改为其他端口
 
 同步更新 `ANTHROPIC_BASE_URL=http://localhost:9090`。
 
-### 修改上游 API（如使用其他 Anthropic 兼容服务）
+### 多上游 / 切换上游（DeepSeek / GLM 等第三方）
 
-编辑 `proxy/config.py`：
+代理按请求体的 `model` 字段路由到不同上游。内置 anthropic / deepseek / glm 与对应路由在 `proxy/config.py`（`UPSTREAMS` / `ROUTES` / `DEFAULT_UPSTREAM`），凭证只从环境变量读。完整流程见〔首次配置：扫描环境、自动选择上游〕。
 
-```python
-UPSTREAM_URL = "https://your-compatible-api.example.com"
+面板「上游路由」可增删自定义上游/路由、禁用内置项、设默认上游、查看各上游 key 是否就绪；也可走 API：
+
+```bash
+# 查看生效上游/路由（key 只显示 key_present，不含 key 值）
+curl -s http://localhost:8080/dashboard/api/routing
+
+# 加一条自定义上游（如 Kimi/Moonshot）——只存 token 环境变量名，不存 key
+curl -X POST http://localhost:8080/dashboard/api/upstreams \
+  -H "Content-Type: application/json" \
+  -d '{"name":"kimi","base_url":"https://api.moonshot.ai/anthropic","auth_scheme":"bearer","token_env":"KIMI_API_KEY"}'
+
+# 加一条路由：kimi* → kimi
+curl -X POST http://localhost:8080/dashboard/api/routes \
+  -H "Content-Type: application/json" \
+  -d '{"name":"kimi","match":"kimi*","upstream":"kimi"}'
 ```
+
+> 单上游回退仍可用：只想整体指向另一个 Anthropic 兼容服务时，改 `proxy/config.py` 的 `UPSTREAM_URL`（它是 anthropic 默认 base 兼回退）。
 
 ---
 

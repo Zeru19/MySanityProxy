@@ -38,6 +38,22 @@ class NameDetectionUpdate(BaseModel):
     enabled: bool  # 智能姓名识别（jieba）开关
 
 
+class UpstreamCreate(BaseModel):
+    name: str
+    base_url: str
+    auth_scheme: str = "x-api-key"   # "x-api-key" | "bearer"
+    token_env: str = ""              # 环境变量名，绝不存 key 本身
+    supports_count_tokens: bool = False
+
+
+class RouteCreate(BaseModel):
+    name: str
+    match: str                       # fnmatch 通配，如 "deepseek*"
+    upstream: str
+    model_rewrite: Optional[str] = None
+    priority: int = 0
+
+
 class LogEntry(BaseModel):
     id: str
     timestamp: str

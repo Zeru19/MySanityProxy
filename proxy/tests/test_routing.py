@@ -188,6 +188,26 @@ async def test_anthropic_passthrough_when_no_env_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deepseek_passthrough_when_no_env_key(monkeypatch):
+    """复用现有配置：未设 DEEPSEEK_API_KEY 时，deepseek 路由仍生效，客户端自带的鉴权头
+    原样透传到 DeepSeek，PII 仍被脱敏——即"接入只需把 ANTHROPIC_BASE_URL 指向代理"。"""
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    cap = {}
+    payload = {"model": "deepseek-chat", "max_tokens": 50, "messages": [PII_MSG]}
+    # 模拟用户原本用 ANTHROPIC_AUTH_TOKEN（Bearer）跑通 DeepSeek 的情形
+    resp = await _post("/v1/messages", payload, cap,
+                       extra_headers={"authorization": "Bearer client-ds"})
+    assert resp.status_code == 200
+    # ① 仍路由到 deepseek 端点（destination 由内置上游/路由提供，无需用户配）
+    assert cap["url"].startswith("https://api.deepseek.com/anthropic/v1/messages")
+    # ② 客户端原鉴权头原样透传（既不删除、也不改写）——无需另设 DEEPSEEK_API_KEY
+    assert _header(cap["headers"], "authorization") == "Bearer client-ds"
+    # ③ PII 仍被脱敏
+    sent = json.dumps(cap["body"], ensure_ascii=False)
+    assert "110101199001011234" not in sent and "[[SANITY_" in sent
+
+
+@pytest.mark.asyncio
 async def test_model_rewrite_applied_to_body(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "ds")
     import storage

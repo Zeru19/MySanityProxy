@@ -57,6 +57,8 @@ done
 
 判定原则：**设了第三方 key 通常就是想用它 → 默认接第三方**；只有 Anthropic / 无 key → 原生。**拿不准就问用户，别擅自假设。**
 
+> **provider key 是可选的，别让用户重复配置。** 上游取不到对应 `token_env` 时，代理会**透传客户端请求自带的鉴权头**（见 `_apply_upstream_auth`）。所以**已在本地用 Claude Code 直连过 DeepSeek 的用户，接入只需改一行 `ANTHROPIC_BASE_URL` 指向代理**，保留其原有的 `ANTHROPIC_MODEL`（如 `deepseek-*`）与 key——原 key 随请求透传，**无需再设 `DEEPSEEK_API_KEY`**。只有"多人共用一台 / 客户端不带 key"时才设 provider key 让代理统一注入。判定上游时优先看 `ANTHROPIC_MODEL` 的前缀，而非"有没有设 provider key"。
+
 ### 第三步：默认配置好并给出启动命令
 
 1. **代理侧**：默认沿用 `proxy/config.py` 内置的 anthropic / deepseek / glm 三个上游与路由；改默认上游用面板「上游路由」或 `POST /dashboard/api/default-upstream {"name":"deepseek"}`。
@@ -71,7 +73,7 @@ done
    }
    ```
    > **切勿把 API key 写进 `settings.local.json`**——key 只走环境变量；该文件会随项目，写进 key 等于落盘泄密。
-3. **核对 key 就绪**：起代理后打开面板「上游路由」，确认目标上游的 **Key 列为 ✓ 就绪**（✗ 表示对应 `token_env` 没在代理进程的环境里）。
+3. **核对 key 就绪**：起代理后打开面板 **「⚙️ 高级」→「模型与服务」→ 打开**（即「上游路由」），看目标上游 **Key 列**：`✓ env 注入`=代理用环境变量注入；`↪ 透传客户端 key`=未设环境变量、用客户端请求自带的 key（也能正常工作，非错误）。
 
 ### 第四步：第三方上游的额外确认项
 
@@ -152,7 +154,9 @@ export ANTHROPIC_BASE_URL=http://localhost:8080
 
 ### 方法 A：Web 面板（推荐）
 
-打开 [http://localhost:8080/dashboard](http://localhost:8080/dashboard)，使用**规则测试**功能：
+> 面板默认只有一屏：**实时请求日志 + 出站审计**。模型/上游、脱敏规则与测试、运行选项（出站自检、jieba、透明模式等）都收在右上角 **「⚙️ 高级」** 里。
+
+打开 [http://localhost:8080/dashboard](http://localhost:8080/dashboard)，点右上角 **「⚙️ 高级」→「脱敏规则」→ 打开**，用底部的**规则测试**：
 
 1. 在测试文本框输入：
    ```

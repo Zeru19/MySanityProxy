@@ -120,6 +120,14 @@ select:focus { outline: none; border-color: var(--accent); }
   transform: translateY(-68%) rotate(45deg); pointer-events: none; transition: border-color .15s;
 }
 .select-wrap:hover::after { border-color: var(--text); }
+/* Base style for every select inside .select-wrap: kill the native arrow so only
+   the single .select-wrap::after chevron shows (fixes the double-arrow on
+   显示条数 / 默认上游 / 鉴权 selects). More specific rules below may override looks. */
+.select-wrap select {
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+  background: var(--surface-3); border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 28px 5px 12px; font-size: 12px; color: var(--text);
+}
 .selfcheck-control select {
   appearance: none; -webkit-appearance: none;
   background: var(--surface-3); border: 1px solid var(--border);
@@ -327,6 +335,24 @@ td .badge:not([class*="badge-"]) { color: var(--text-muted); background: var(--s
 .uf-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
 .key-ok { color: var(--green); font-weight: 600; }
 .key-no { color: var(--red); font-weight: 600; }
+/* 透传位：不是错误，别用红——请求自带的 key 会被转发，属正常可用状态 */
+.key-passthru { color: var(--text-muted); font-weight: 600; cursor: help; }
+/* 内置上游/路由：灰色「预览」行——表示开箱即用，设置对应环境变量即可启用，无需重复添加。
+   Key 列(✓/✗)等带自有颜色的 span 不受影响，状态仍醒目。 */
+.up-builtin td, .rt-builtin td { color: var(--text-faint); }
+.up-builtin .mono, .rt-builtin .mono { color: var(--text-faint); }
+.up-builtin td:nth-child(2) { color: var(--text-muted); font-weight: 500; }
+/* 高级折叠区：自定义上游/路由默认收起，常规用户只看到内置预览 */
+.routing-advanced { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
+.routing-advanced > summary {
+  cursor: pointer; list-style: none; user-select: none;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; color: var(--text-muted); padding: 4px 0;
+}
+.routing-advanced > summary::-webkit-details-marker { display: none; }
+.routing-advanced > summary::before { content: "▸"; color: var(--text-faint); transition: transform .15s; }
+.routing-advanced[open] > summary::before { transform: rotate(90deg); }
+.routing-advanced > summary:hover { color: var(--text); }
 
 /* ── Toggle ─────────────────────────────────────────────────────────────── */
 .toggle { position: relative; display: inline-block; width: 38px; height: 21px; }
@@ -335,6 +361,31 @@ td .badge:not([class*="badge-"]) { color: var(--text-muted); background: var(--s
 .toggle-slider::before { content: ""; position: absolute; height: 15px; width: 15px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: .2s; }
 input:checked + .toggle-slider { background: linear-gradient(135deg, var(--green), #16a97c); }
 input:checked + .toggle-slider::before { transform: translateX(17px); }
+/* 危险开关（透明模式）：开启用琥珀色警示，而非绿色 */
+input:checked + .toggle-slider.toggle-danger { background: linear-gradient(135deg, var(--yellow), #d98a00); }
+
+/* ── Two-step empty state（首屏引导） ─────────────────────────────────────── */
+.empty-state { padding: 22px 20px; border-bottom: 1px solid var(--border); }
+.empty-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+.empty-steps { list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 10px; margin: 0 0 12px; padding: 0; }
+.empty-steps li { counter-increment: step; position: relative; padding-left: 32px; font-size: 13px; color: var(--text-muted); line-height: 1.9; }
+.empty-steps li::before {
+  content: counter(step); position: absolute; left: 0; top: 1px;
+  width: 21px; height: 21px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+.empty-steps code {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px 8px; font-family: "Menlo","Consolas",monospace; font-size: 12.5px; color: var(--code);
+}
+.empty-steps .ok { color: var(--green); font-weight: 600; margin-left: 8px; font-size: 12px; }
+.empty-foot { font-size: 12.5px; color: var(--text-faint); }
+
+/* ── Advanced modal ──────────────────────────────────────────────────────── */
+.adv-intro { font-size: 12.5px; color: var(--text-faint); line-height: 1.7; margin-bottom: 4px; }
+.adv-intro code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-family: "Menlo","Consolas",monospace; font-size: 12px; color: var(--code); }
+.danger-desc { color: var(--yellow) !important; }
 
 /* ── Utilities ──────────────────────────────────────────────────────────── */
 .mono { font-family: "Menlo", "Consolas", monospace; font-size: 12px; color: var(--text-muted); }

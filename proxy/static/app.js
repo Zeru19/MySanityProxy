@@ -30,23 +30,16 @@ document.getElementById("btn-theme-toggle").addEventListener("click", () => {
   applyTheme(next);
 });
 
-// ── Settings dropdown (gear) ─────────────────────────────────────────────────
-const _settingsMenu = document.getElementById("settings-menu");
-const _settingsWrap = document.getElementById("settings-wrap");
-const _settingsBtn = document.getElementById("btn-settings");
-function toggleSettings(open) {
-  const show = open === undefined ? _settingsMenu.hidden : open;
-  _settingsMenu.hidden = !show;
-  _settingsBtn.setAttribute("aria-expanded", show ? "true" : "false");
-}
-_settingsBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleSettings(); });
-document.addEventListener("click", (e) => {
-  if (!_settingsMenu.hidden && !_settingsWrap.contains(e.target)) toggleSettings(false);
+// ── Advanced modal (gear) ────────────────────────────────────────────────────
+// 「高级」入口：把模型/规则/运行选项都收在这里，默认界面只剩日志与审计。
+function openAdv() { document.getElementById("adv-modal-backdrop").style.display = "flex"; }
+function closeAdv() { document.getElementById("adv-modal-backdrop").style.display = "none"; }
+document.getElementById("btn-advanced").addEventListener("click", openAdv);
+document.getElementById("btn-adv-close").addEventListener("click", closeAdv);
+document.getElementById("adv-modal-backdrop").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) closeAdv();
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleSettings(false); });
-// 点「上游路由 / 规则管理」后收起菜单（它们各自的打开弹窗逻辑不变）
-document.querySelectorAll(".settings-action").forEach(
-  (b) => b.addEventListener("click", () => toggleSettings(false)));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAdv(); });
 
 // ── Stat counters ────────────────────────────────────────────────────────────
 function updateStats(entry) {
@@ -81,11 +74,15 @@ function appendLog(entry) {
   // cap at 200 rows
   while (tbody.children.length > 200) tbody.removeChild(tbody.lastChild);
   document.getElementById("log-count").textContent = tbody.children.length;
+  const empty = document.getElementById("log-empty");
+  if (empty) empty.style.display = "none";  // 来了第一条就收起两步引导
 }
 
 document.getElementById("btn-clear-log").addEventListener("click", () => {
   document.getElementById("log-body").innerHTML = "";
   document.getElementById("log-count").textContent = "0";
+  const empty = document.getElementById("log-empty");
+  if (empty) empty.style.display = "";  // 清空后重新显示两步引导
   totalReqs = totalTokens = totalHits = 0;
   document.getElementById("stat-tokens").textContent = "0";
   document.getElementById("stat-reqs").textContent = "0";
@@ -420,11 +417,12 @@ function renderUpstreams() {
     const ident = u.builtin ? `builtin:${u.name}` : u.id;
     const src = u.builtin ? '<span class="badge badge-blue">内置</span>' : '<span class="badge">自定义</span>';
     let key;
-    if (!u.token_env) key = '<span class="key-no">无(透传)</span>';
-    else if (u.key_present) key = '<span class="key-ok">✓ 就绪</span>';
-    else key = '<span class="key-no">✗ 未设</span>';
+    if (!u.token_env) key = '<span class="key-passthru">↪ 透传</span>';
+    else if (u.key_present) key = '<span class="key-ok">✓ env 注入</span>';
+    else key = `<span class="key-passthru" title="未设 ${escapeHtml(u.token_env)}：请求自带的 key 会原样透传到该上游（接入只需把 ANTHROPIC_BASE_URL 指向本代理）。也可设该环境变量改为由代理统一注入。">↪ 透传客户端 key</span>`;
     const del = u.builtin ? "" : `<button class="btn btn-sm btn-danger" data-ident="${u.id}" data-action="delete">删除</button>`;
     const tr = document.createElement("tr");
+    if (u.builtin) tr.className = "up-builtin";
     tr.innerHTML = `
       <td><label class="toggle"><input type="checkbox" ${u.enabled ? "checked" : ""} data-ident="${ident}" data-action="toggle"/><span class="toggle-slider"></span></label></td>
       <td>${escapeHtml(u.name)}</td>
@@ -448,6 +446,7 @@ function renderRoutes() {
     const src = r.builtin ? '<span class="badge badge-blue">内置</span>' : '<span class="badge">自定义</span>';
     const del = r.builtin ? "" : `<button class="btn btn-sm btn-danger" data-ident="${r.id}" data-action="delete">删除</button>`;
     const tr = document.createElement("tr");
+    if (r.builtin) tr.className = "rt-builtin";
     tr.innerHTML = `
       <td><label class="toggle"><input type="checkbox" ${r.enabled ? "checked" : ""} data-ident="${ident}" data-action="toggle"/><span class="toggle-slider"></span></label></td>
       <td>${escapeHtml(r.name)}</td>

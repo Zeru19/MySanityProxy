@@ -46,23 +46,23 @@ Custom rules can be added via the web dashboard or API.
 
 ## Quick start
 
+**It's two steps: ① start the proxy ② point Claude Code at it.** Then use it normally.
+(Using DeepSeek / GLM? Keep your existing `ANTHROPIC_MODEL` — **no key reconfig needed**; see *Multiple upstreams / third-party models*.)
+
 **Requirements:** Python 3.9+
 
 ```bash
-# 1. Install dependencies
-cd proxy
-pip install -r requirements.txt
+# Install deps (first time)
+cd proxy && pip install -r requirements.txt
 
-# 2. Start the proxy
-python main.py
-# → http://127.0.0.1:8080
+# ① Start the proxy
+python main.py            # → http://127.0.0.1:8080
 
-# 3. Open the dashboard
-open http://localhost:8080/dashboard
-
-# 4. Point Claude Code at the proxy
+# ② Point Claude Code at the proxy
 ANTHROPIC_BASE_URL=http://localhost:8080 claude
 ```
+
+> Dashboard (optional): open `http://localhost:8080/dashboard` — by default it's a single screen: **live request log + outbound audit**. Models, rules, and run options live behind "⚙️ 高级 (Advanced)" in the top-right; you rarely need them.
 
 ## What it looks like
 
@@ -131,12 +131,17 @@ Upstreams/routes can also be edited live in the dashboard's *Upstream routing* p
 
 Claude Code honors a single `ANTHROPIC_BASE_URL`, so all requests go to SanityProxy, which then **routes** by the request body's `model` field to different upstreams. DeepSeek and GLM both expose **Anthropic-compatible endpoints**, so the desensitization logic is reused unchanged.
 
-**Credentials come only from environment variables** — never written to `sanity.db` / logs / snapshots:
+**Already use a third-party (e.g. DeepSeek) with Claude Code? Connecting is a one-line change** — point `ANTHROPIC_BASE_URL` at this proxy and keep your existing `ANTHROPIC_MODEL` (e.g. `deepseek-*`, which auto-matches the route) and key. Your key rides along in the request and is **passed through** to the target upstream, so you **don't need to set `DEEPSEEK_API_KEY` again**.
+
+**Two credential sources, pick either (both in-memory only — never written to `sanity.db` / logs / snapshots):**
+- **Pass-through (default, zero extra config):** with no provider key set, the proxy forwards the client's own auth header to the target upstream — best for "single machine, client already carries the key".
+- **Proxy-injected (optional):** set the provider's env var and the proxy injects it — best for a shared instance, or clients that don't carry a key.
 
 ```bash
+# Optional: set → proxy injects; unset → pass-through (reuse the client's own key)
 export DEEPSEEK_API_KEY=sk-...   # DeepSeek
 export GLM_API_KEY=...           # Zhipu GLM (Z.AI / BigModel)
-# Anthropic: no key needed when logged in via a Claude subscription (OAuth) — the proxy passes your existing auth through
+# Anthropic: no key needed when logged in via a Claude subscription (OAuth) — pass-through forwards your existing auth
 ```
 
 Built-in upstreams and default routes (`proxy/config.py`, also editable in the dashboard):
